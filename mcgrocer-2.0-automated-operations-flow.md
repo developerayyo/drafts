@@ -100,7 +100,7 @@ flowchart TD
         P1 --> ERPVAL{5 Shopping-Readiness Checks — all must pass before any item is bought\n1 DG fee — £87 paid if DG items present — auto-waived for EU / Norway / Switzerland\n2 Extra shipping fee — paid if estimated weight exceeds flat-rate threshold\n3 Alcohol — customer confirmed 18+ AND CE Tier 1 confirms destination permits import\n4 Electrical — customer confirmed UK spec: 3-pin BS1363 plug — 230V — 50Hz\n5 Restricted items — customer uploaded required licence or permit document}
         P2 --> ERPVAL
         P3 --> ERPVAL
-        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for Sourcing Router — AI Shopper\nRouting flag per item: online (default) or in-store-priority — both streams parallel per 360° Layer 3 architecture]
+        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for Sourcing Router — AI Shopper\nRouting flag per item: online by default or in-store-priority — both streams parallel per 360° Layer 3 architecture]
         ERPVAL -->|Any check fails| CE2BLOCK[AUTO: Customer emailed with exact requirement and action link\nDG fee payment link — extra shipping payment link\nalcohol or electrical confirmation link — document upload link\nOrder: On hold]
         CE2BLOCK --> CUSTACT[HUMAN: Customer completes the required action\nPays fee — OR confirms via portal — OR uploads document]
         CUSTACT --> ETERECHECK{Operations hub detects action\nFailing check now passes?}
