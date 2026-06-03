@@ -700,8 +700,8 @@ OOS (Out of Stock) detected AND a substitute exists
     ↓
 [AUTO] Substitute offer email sent: product image + description + price comparison
     ↓ Customer approves (within response window) → [AGENT] AI Shopper purchases substitute
-    ↓ Customer rejects → OOS cancellation chain above
-    ↓ No response in 48h → OOS cancellation chain above
+    ↓ Customer rejects → fall back to in-store shopping; if not found in store → partial-ship-or-cancel chain above
+    ↓ No response in 48h → fall back to in-store shopping; if not found in store → partial-ship-or-cancel chain above
     All decisions logged in the operations hub against the Shopping Item (decision log)
 ```
 
@@ -781,9 +781,16 @@ flowchart TD
     H -->|Partial — some items found\nsome OOS or unavailable| PART[AGENT: Checks out available items at this retailer\nFor OOS items: immediately searches\nall other McGrocer online retailers]
     H -->|None found\nat this retailer| J[AGENT: Searches ALL other\nMcGrocer online retailers]
     PART -->|OOS items found\nat another online retailer| I
-    PART -->|OOS items not found\nat any online retailer| K[AUTO: OOS Shopping Items switched\nto buy in store\nIn-store Shopper alerted\nvia Shopping List app\nitem + qty + all online\nretailers tried + deadline]
+    PART -->|OOS items not found\nat any online retailer| SUBCHK
     J -->|Found at another\nonline retailer| I
-    J -->|Not found at any\nonline retailer| K
+    J -->|Not found at any\nonline retailer| SUBCHK
+    SUBCHK{Suitable substitute\navailable online?} -->|Yes| SUBOFFER[AUTO: Substitute offer email\nproduct image + description + price comparison\nNever bought without customer approval]
+    SUBCHK -->|No substitute| K[AUTO: OOS Shopping Items switched\nto buy in store\nIn-store Shopper alerted\nvia Shopping List app\nitem + qty + all online\nretailers tried + deadline]
+    SUBOFFER --> SUBRESP{Customer response\nwithin window?}
+    SUBRESP -->|Approves| SUBBUY[AGENT: AI Shopper buys\napproved substitute online\nDecision logged in operations hub]
+    SUBRESP -->|Rejects| K
+    SUBRESP -->|48h no reply| K
+    SUBBUY --> I
     K --> F[HUMAN: In-store Shopper\nopens Shopping List app\nShops at up to 3 physical stores]
     F --> O{Item found\nin store?}
     O -->|Yes - Found| P[HUMAN: Enter qty\nConfirm Purchase\nin Shopping List app\nAUTO: cost logged\nShopping Item: Shopped]
@@ -1113,14 +1120,19 @@ flowchart TD
     C -->|Blocked| CBLOCK[GATE: Ops alerted with specific reason:\nMissing HS code: Compliance Lead adds HS code\nto the Item master in operations hub\nSanctions match: verify identity — clear or cancel order\nUK export restriction: verify — clear or obtain export licence\nAUTO: Dispatch Agent re-runs pre-label check\nonce Ops confirms the issue is resolved]
     CBLOCK --> RESOLVE_CE[HUMAN: Compliance Lead or Ops\nresolves the specific block\nOperations hub updated]
     RESOLVE_CE --> C
-    C -->|Cleared| D{DG shipment?}
+    C -->|Cleared| G[AUTO: Commercial invoice\nauto-generated from order data\nHS code per line — declared value = actual sale price\nDDU statement included]
+    G --> D{DG shipment?}
     D -->|Yes| E[AGENT: Checks operations hub for confirmation\nthat MSDS and shipper declaration are\nphysically attached to the sealed parcel\nConfirmation was set by warehouse in M05]
     E -->|Not confirmed\nin operations hub| F[GATE: Ops alerted\nLabel creation blocked\nWarehouse must physically attach docs\nand confirm in operations hub]
     F --> RESOLVE_DG[HUMAN: Warehouse associate\nphysically attaches MSDS and shipper declaration\nto the sealed parcel\nTicks confirmation in operations hub]
     RESOLVE_DG --> E
-    E -->|Confirmed| G
-    D -->|No| G[AUTO: Commercial invoice\nauto-generated from order data\ndeclared value = actual sale price]
-    G --> H[AGENT: Request rates from ShipStation\ndestination + weight + dimensions\nGet carrier rates]
+    E -->|Confirmed| FDA
+    D -->|No| FDA{US food shipment?\nFood item + destination = USA?}
+    FDA -->|Yes — food to USA| FDAG[AGENT: Submit FDA Prior Notice\nto FDA PNSI portal — HARD GATE\nNo label created until FDA returns\na confirmation number\nAuto-retry 2 - 5 - 10 min]
+    FDAG -->|Confirmation number received| H
+    FDAG -->|4 hours — no confirmation| FDAB[GATE: HUMAN Ops files\nFDA Prior Notice manually\nEnters confirmation number\nLabel creation resumes]
+    FDAB --> H
+    FDA -->|Not a US food shipment| H[AGENT: Request rates from ShipStation\ndestination + weight + dimensions\nGet carrier rates]
     H --> I{Valid carrier\nrates returned?}
     I -->|No rates| J[GATE: HUMAN Ops books manually\nShipStation portal OR DHL direct\nOR World Options OR other\nEnter tracking in operations hub]
     I -->|Rates returned| K[AGENT: Apply carrier\nselection rules]
