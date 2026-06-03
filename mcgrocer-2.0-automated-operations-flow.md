@@ -1,6 +1,7 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 2.5 — 2026-06-03**
+**Version 2.6 — 2026-06-03**
+**Changelog — v2.6:** CF-01 dispatch address corrected; CF-02 routing changed to flag-based parallel streams; CF-03 UPS Express Saver named as primary carrier; G-01 fraud threshold added; G-02 migration coexistence note added; G-03/G-04/G-08 config placeholders added; G-05 box dimension table added; G-06 label printing step added.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
 > **How this document is written:**
@@ -99,7 +100,7 @@ flowchart TD
         P1 --> ERPVAL{5 Shopping-Readiness Checks — all must pass before any item is bought\n1 DG fee — £87 paid if DG items present — auto-waived for EU / Norway / Switzerland\n2 Extra shipping fee — paid if estimated weight exceeds flat-rate threshold\n3 Alcohol — customer confirmed 18+ AND CE Tier 1 confirms destination permits import\n4 Electrical — customer confirmed UK spec: 3-pin BS1363 plug — 230V — 50Hz\n5 Restricted items — customer uploaded required licence or permit document}
         P2 --> ERPVAL
         P3 --> ERPVAL
-        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for Sourcing Router — AI Shopper\nChannel: online by default — in-store only as fallback]
+        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for Sourcing Router — AI Shopper\nRouting flag per item: online (default) or in-store-priority — both streams parallel per 360° Layer 3 architecture]
         ERPVAL -->|Any check fails| CE2BLOCK[AUTO: Customer emailed with exact requirement and action link\nDG fee payment link — extra shipping payment link\nalcohol or electrical confirmation link — document upload link\nOrder: On hold]
         CE2BLOCK --> CUSTACT[HUMAN: Customer completes the required action\nPays fee — OR confirms via portal — OR uploads document]
         CUSTACT --> ETERECHECK{Operations hub detects action\nFailing check now passes?}
@@ -205,7 +206,7 @@ flowchart TD
     subgraph M06["M06 — CARRIER BOOKING, LABEL & HANDOFF"]
         direction TB
         DISPATCHQ --> AISTART[AGENT: Dispatch Agent — AI-010 — via Gated Tool Layer\nPicks up oldest order in Awaiting shipment status]
-        AISTART --> DNCHECK[AGENT: Validates Delivery Note in operations hub\nparcel_weight — parcel_length — parcel_width — parcel_height\ndelivery address — dispatch address must be McGrocer-Billing Brentwood CM14 4JE\nIf any field missing: Ops alerted — agent stops]
+        AISTART --> DNCHECK[AGENT: Validates Delivery Note in operations hub\nparcel_weight — parcel_length — parcel_width — parcel_height\ndelivery address — dispatch address must be McGrocer Fulfilment Hub — Unit C — Hubert Road — Brentwood — CM14 4JE\nIf any field missing: Ops alerted — agent stops]
         DNCHECK --> CECHECK[COMPLY: Pre-label compliance check\nTier 1 YAML rules — Redis cache — under 50ms\nTier 2 LLM if cache miss — Tier 3 Compliance Lead if confidence below 0.80 — 24hr SLA\n1 HS code present on every order line for this destination\n2 Real-time sanctions re-screen on delivery name and address\n3 UK export restrictions satisfied for all items]
         CECHECK -->|Blocked — missing HS code\nor sanctions match found| CEDBLOCK[GATE: Ops alerted with specific reason:\nMissing HS code: Compliance Lead adds to Item master\nSanctions: verify and clear — or cancel order\nExport restriction: verify and clear — or obtain licence]
         CEDBLOCK --> RESOLVE6CE[HUMAN: Compliance Lead or Ops resolves\nthe specific block in operations hub\nAUTO: Dispatch Agent re-runs\npre-label check once resolved]
@@ -355,7 +356,7 @@ This flow is the **completed “Proposed Process”** from the CEO Fulfilment Op
 | **ARCH-001 / storefront** | Payment before order acceptance · idempotent order submit · automated emails · ShipStation-first dispatch (with manual carrier fallback) · FDA gate for US food |
 | **360° architecture** | Storefront → operations hub → Shopping (online + in-store) → hub QC (Quality Control) → carrier — compliance checks at order entry, pre-label, and return |
 
-**Intentional improvements vs old manual flow:** No payment after Shopping · no ChatGPT copy-paste compliance · no Slack for order status (operations hub is live) · online Shopping first, in-store only as backup · every AI action runs through a gated tool layer with an append-only decision log.
+**Intentional improvements vs old manual flow:** No payment after Shopping · no ChatGPT copy-paste compliance · no Slack for order status (operations hub is live) · online Shopping first by default — in-store-priority flag routes directly to in-store without online attempt — both streams parallel per 360° Layer 3 · every AI action runs through a gated tool layer with an append-only decision log.
 
 **For Frappe Engineers only:** Record names (Sales Order, Shopping Item, Delivery Note, etc.) are listed in the appendix — not used in day-to-day operations language.
 
@@ -426,6 +427,9 @@ Runs immediately after payment, before the order is **Confirmed**:
 3. DG / alcohol / OTC medication / food / electrical rules satisfied?
 4. Payment confirmed and valid?
 5. Fraud or duplicate-order check clear?
+
+   → Fraud score threshold: if the Order Review Agent (AI-001) returns a confidence score below 0.70, the order is automatically placed on HOLD and the Operations manager is alerted via Slack with a direct ERPNext link. Score ≥ 0.70 passes automatically. This threshold (0.70) matches the SOW ARCH-001 agent pipeline confidence gate and must be configured in the Order Review Agent before go-live. [CONFIG — confirm with Head of Engineering before build]
+
 6. Sanctions screening clear?
 7. Does the shipping charge cover the estimated carrier cost?
 
@@ -501,6 +505,7 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 | Timing | Value | Where it applies |
 |--------|-------|------------------|
 | Compliance **On hold** review window | 2 hours | M01 — operations manager/CS resolves a held order |
+| Fraud score HOLD threshold | 0.70 (below = HOLD, ≥ 0.70 = pass) | M01 — Order Review Agent |
 | Order fulfilment commitment | 1–3 business days | End-to-end SLA (M12 SLA tracker) |
 | Shopping Item stuck alert | Pending > 24 hours | M12 alert to operations manager |
 | Customer no-reply on OOS / substitute offer | 48 hours → item dropped, partial refund | M02 / M07 |
@@ -518,6 +523,8 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 | Weekly cycle count | Weekly | M10 |
 | UPS carrier claim window | 60 days from shipment (alert when < 14 days remain) | M09 |
 | Repeat-incident pattern flag | > 2 incidents/month (same SKU, route, or carrier) | M09 / M12 |
+| Write-off threshold | £[to confirm] | M08 return triage — auto write-off vs quarantine |
+| Auto-refund limit | £[to confirm] | M08 — auto-issue vs CS confirmation required |
 
 ---
 
@@ -571,8 +578,19 @@ Full legal text: Shipping Policy and Terms and Conditions (linked from checkout)
 | 11 | **All lines in stock** → reserve the stock. Status: **Processing** (Shopping is skipped). The Tote is assigned at the first receiving scan in M03. | `[AUTO]` | Operations hub | Stock reserved; status **Processing** |
 | 12 | **Partial stock** → reserve the available quantity; create one **Shopping Item** for each shortfall quantity. Status: **Shopping**. | `[AUTO]` | Operations hub | Shopping Items created (shortfall only); status **Shopping** |
 | 13 | **No stock** → create a Shopping Item for every order line. Status: **Shopping**. | `[AUTO]` | Operations hub | Shopping Items created (all lines); status **Shopping** |
-| 14 | Every Shopping Item defaults to **online** retailer purchase and is queued for the AI Shopper. In-store is only used later if online fails (M02). | `[AUTO]` | Operations hub | Shopping Items queued: buy online |
+| 14 | Every Shopping Item is assigned a routing flag: online (default) or in-store-priority. Online items are queued for the AI Shopper. In-store-priority items (e.g. Kendamil when online slots are unavailable, or items flagged by Ops) are routed directly to the Shopping List app. Both streams can run in parallel for the same order. The routing flag can be changed manually via the Shopping List app bulk action (Change Shopping Source). | `[AUTO]` | Operations hub | Shopping Items queued: buy online |
 | 15 | **5 Shopping-Readiness Checks** — all must pass before any item is bought. The exact 5 are defined once in the [Checks Register](#checks-register): (1) DG (Dangerous Goods) £87 fee paid if required (waived for EU / Norway / Switzerland), (2) extra shipping fee paid if the order's weight exceeded the checkout estimate, (3) alcohol age + destination import confirmation on file, (4) electrical UK-specification acknowledgement on file, (5) licence/permit confirmation on file if the item requires one. Any fail → customer emailed the specific requirement → order **On hold** until resolved. | `[AUTO]` | Operations hub → customer notifications | Each check pass/fail recorded; Shopping released only when all 5 pass |
+
+> **Migration note (SOW M1–M3 W11):** During the migration period,
+> sync_sales_order() from Shopify and the new storefront endpoint
+> run in parallel. Both paths must generate the idempotency key
+> using the same algorithm (Shopify order ID as the key seed) so
+> that a retry from either source returns the original result rather
+> than creating a duplicate order. The Frappe Engineer must confirm
+> that both the Shopify webhook handler and the new storefront API
+> use the same key generation logic before the parallel period
+> begins. sync_sales_order() is retired at M3 W11 cutover per
+> SOW-ARCH-001 v1.4.
 
 ### Human escalation
 
@@ -624,7 +642,7 @@ Every item not held in stock is bought from the right retailer at the right pric
 
 ### What this module does
 
-When items are not in **available stock**, we **shop** for them at UK retailers (like Instacart shopping). The **AI Shopper** checks out online — one **retailer checkout** per store for many customer orders. If an item is **Out of Stock (OOS)** online everywhere, an **In-store Shopper** uses the **Shopping List app** (up to 3 stores).
+When items are not in **available stock**, we **shop** for them at UK retailers (like Instacart shopping). The AI Shopper checks out online — one retailer checkout per store for many customer orders. Items flagged as in-store-priority go directly to the In-store Shopper via the Shopping List app without waiting for online to fail. Items that are OOS online also escalate to in-store. Both streams can run in parallel for the same order.
 
 ### What starts this module
 
@@ -657,7 +675,7 @@ Every item that needs to be bought externally gets its own record (a **Shopping 
 | 6 | The AI Shopper picks up the oldest retailer checkout and begins purchasing, acting through the gated tool layer (never the retailer site directly). | `[AGENT]` | AI Shopper → gated tool layer | Checkout session started |
 | 7 | The AI Shopper logs into the retailer's website using securely stored credentials held in the gated tool layer. | `[AGENT]` | AI Shopper → gated tool layer | Logged in |
 | 8 | The AI Shopper adds all required items (combined quantities for all orders needing them) to the Cart. | `[AGENT]` | AI Shopper | Retailer Cart built |
-| 9 | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub | Approval recorded if over cap |
+| 9 | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. The default spend cap is £[OPS TO CONFIRM — suggested £500] per retailer checkout session. This value must be set in the operations hub retailer settings before go-live and confirmed by the Operations Lead. [CONFIG — Owner: Operations Lead — Deadline: before M3 W9] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub | Approval recorded if over cap |
 | 10 | The AI Shopper checks out: the McGrocer delivery address is pre-saved, payment is pre-saved, and the earliest available delivery slot to the warehouse is selected. | `[AGENT]` | AI Shopper → gated tool layer | Order placed with retailer |
 | 11 | The AI Shopper records, against each Shopping Item, the retailer's order confirmation number, the expected delivery date, and the actual purchase cost. The Shopping Items are marked **Purchased**. Every input and response is written to the decision log. | `[AGENT]` | AI Shopper → operations hub | Retailer order ref + expected delivery + cost; items **Purchased**; decision logged |
 | 12 | Once all Shopping Items for an order are purchased, the order stays at status **Shopping** (everything is ordered and now in transit to the warehouse). Operations and warehouse are notified automatically. | `[AUTO]` | Operations hub → customer notifications | Status confirmed **Shopping**; Ops + warehouse notified |
@@ -705,14 +723,14 @@ OOS (Out of Stock) detected AND a substitute exists
     All decisions logged in the operations hub against the Shopping Item (decision log)
 ```
 
-> **Human-in-the-loop rule:** a substitute is **never bought without explicit customer approval**. If the substitute price is more than the configured percentage above the original, approval is always required — there is no auto-accept path.
+> **Human-in-the-loop rule:** a substitute is **never bought without explicit customer approval**. If the substitute price is more than [OPS TO CONFIRM — suggested 15%] above the original item price, customer approval is always required before the AI Shopper purchases. Below this threshold, the substitute offer is still sent to the customer but may be configured to auto-approve after the response window if the customer does not respond. The exact percentage and auto-approve behaviour must be confirmed by the Operations Lead before build. [CONFIG — Owner: Operations Lead — Deadline: before M2 W5]
 
 ### Shopping List app — the mobile shopping list
 
 **URL:** `https://erpnext.mcgrocer.com/shopping-list`
 **Who uses it:** In-store Shoppers (requires the `Shopper` role in the operations hub)
 **Device:** Mobile-optimised — designed to be used on a phone while physically in a retail store
-**When it activates:** Only for items the AI Shopper could not buy from any online retailer. All items start as "buy online" by default; this app only shows items that have been escalated to in-store purchasing after every online option was exhausted.
+**When it activates:** For two categories of item: (1) items whose routing flag is in-store-priority — these appear immediately without waiting for online to fail; (2) items that were attempted online and are OOS at every online retailer — these are escalated after online exhaustion. The flag can be set by Ops or by the system based on item-level rules (e.g. Kendamil when online delivery slots exceed the warehouse deadline).
 
 When a Shopping Item is switched to "buy in store", it appears on this page for the assigned In-store Shopper. This is their complete workflow tool at the store.
 
@@ -1010,6 +1028,16 @@ Sealed parcel in **dispatch staging** with **internal packing reference only**; 
 | 18 | Parcel moved to **dispatch staging**; the **Tote** is released back to Available. Status: **Awaiting shipment**. | `[AUTO]` | Operations hub | Tote released; status **Awaiting shipment** |
 | 19 | **Pre-dispatch checklist** before carrier booking (see [Checks Register](#checks-register)): (1) parcel data complete; (2) DG documents physically on the parcel if a DG order. Fail → operations manager alerted. Pass → the **dispatch agent** starts M06. | `[AUTO]` | Operations hub | Checklist result; dispatch agent triggered on pass |
 
+Box dimensions must be loaded into the ERPNext Box Size master before go-live. The volumetric weight check in step 15 (L×W×H ÷ 5,000) uses these dimensions. Without them the check cannot compute. The Operations Lead must provide the actual warehouse box specs and the Frappe Engineer loads them.
+
+| Box code | L × W × H (cm) | Max actual weight | Typical use |
+|----------|----------------|-------------------|-------------|
+| S — Small | [OPS TO CONFIRM] | [OPS TO CONFIRM] | 1–3 light items |
+| M — Medium | [OPS TO CONFIRM] | [OPS TO CONFIRM] | 4–8 items |
+| L — Large | [OPS TO CONFIRM] | [OPS TO CONFIRM] | Large/heavy orders |
+
+[DATA TASK — Owner: Operations Lead — Deadline: before M3 W9]
+
 ### M05 Flowchart
 
 ```mermaid
@@ -1090,6 +1118,7 @@ A booked shipment with a carrier, a tracking number recorded in the operations h
 | 9 | The agent selects the carrier using the [Carrier Selection Rules](#carrier-selection-rules) (cheapest valid service unless express/DG/remote rules apply). | `[AGENT]` | Dispatch agent | Carrier + service selected |
 | 10 | **If no valid ShipStation rate, or Operations chooses a cheaper channel:** shipment stays in draft; Operations books manually on **ShipStation portal**, **DHL direct**, **World Options**, or another approved courier site — then enters tracking number, carrier name, and cost in the operations hub. Reason logged (no rate / cheaper direct / DG route / remote postcode). | `[GATE]` `[HUMAN]` Ops | Alternate carrier channel → operations hub | Manual booking + tracking captured |
 | 11 | **Label created:** ShipStation API when step 8–9 succeeded; otherwise label/AWB from the manual channel. This is the only dispatch booking step in the flow. | `[AGENT]` or `[HUMAN]` Ops | ShipStation or alternate channel | Carrier label / AWB produced |
+| 11a | **Label surfaced in operations hub:** The ShipStation API returns a label PDF URL (stored as `shipstation_label_url` on the Delivery Note DocType). The Frappe Engineer must add a 'Print label' button to the Delivery Note form view that opens this URL and sends it to the connected label printer. The label printer (Zebra ZPL or equivalent) must be configured at the packing station and connected to the ERPNext instance. The warehouse associate clicks 'Print label', the label prints, and the associate confirms print by ticking 'Label printed' on the Delivery Note. [BUILD TASK — Owner: Frappe Engineer — Deadline: Sprint 1] | `[HUMAN]` warehouse + `[AUTO]` Frappe config | Operations hub | Label printed confirmed on Delivery Note |
 | 12 | The tracking number, carrier, and label ID are saved on the fulfillment record. Status: **Shipped**. The **fulfillment notification** (the "your order has shipped" tracking email — tracking number, link, carrier) is sent to the customer. | `[AUTO]` | Operations hub → customer notifications | Tracking saved; status **Shipped**; tracking email sent |
 | 13 | A **customs outcome** field is opened on the order with status **Pending**. Customer support updates it when they learn what happened at customs (cleared, held, seized, etc.). This data feeds anomaly detection in M12. | `[AUTO]` | Operations hub | Customs outcome tracking started (Pending) |
 | 14 | Warehouse associate applies the carrier label to the parcel and scans it to confirm the tracking number is registered in the operations hub. | `[HUMAN]` apply + scan | Operations hub | Label on parcel; tracking confirmed |
@@ -1102,7 +1131,8 @@ A booked shipment with a carrier, a tracking number recorded in the operations h
 
 | Condition | Rule | Who Decides | Typical channel |
 |-----------|------|------------|-----------------|
-| UK mainland, standard SLA | Cheapest valid rate | `[AGENT]` auto | ShipStation |
+| International standard (all destinations) | UPS Express Saver is the default international carrier. Agent selects UPS Express Saver unless a specific override rule below applies. | `[AGENT]` auto | ShipStation |
+| UK mainland, standard SLA | UPS Express Saver is the primary carrier. If UPS Express Saver is unavailable for the destination, select the next cheapest valid rate. | `[AGENT]` auto | ShipStation |
 | Next-day SLA required | Overnight service, regardless of cost | `[AGENT]` auto | ShipStation |
 | Remote postcode (HS, ZE, KW, IV, BT) | Accept up to £20 threshold; Ops alert if over | `[AGENT]` + `[HUMAN]` if over | ShipStation or manual |
 | International express | Express international service | `[AGENT]` auto unless manual cheaper | ShipStation; **DHL direct** / **World Options** if Ops finds lower cost |
@@ -1243,7 +1273,13 @@ A return request from the customer (via email or support desk ticket), a courier
 | 3 | Acceptable — damaged packaging only | CS quick review (2h window) → restock or partial refund |
 | 2 | Poor — product damaged | **Quarantine → Operations manager decision** (retailer return, write-off, or disposal depending on value and recoverability) |
 | 1 + high value | Write-off — carrier damage attributable | Carrier claim filed automatically (M09) |
-| 1 + low value | Write-off — below threshold | Write-off → full refund auto-issued |
+| 1 + low value | Write-off — order line value below £[FINANCE TO CONFIRM — suggested £30] | Write-off → full refund auto-issued without investigation or reship |
+
+**Write-off threshold and auto-refund limit:**
+- Write-off threshold: £[FINANCE TO CONFIRM — suggested £30]. If the order line value is at or below this amount, the system automatically writes off the item and issues a full refund without investigation. Above this threshold, the decision tree routes to quarantine or carrier claim.
+- Auto-refund limit: £[FINANCE TO CONFIRM — suggested £150]. Refunds at or below this amount are auto-issued from the triage output. Above this limit, CS receives a notification and must manually confirm before the refund is processed.
+
+[CONFIG — Owner: Operations Lead + Finance Lead — Deadline: before M3 W9]
 
 ### Step-by-Step
 
@@ -1498,7 +1534,7 @@ Every outbound shipment requires a commercial invoice. In McGrocer 2.0 this is a
 
 | Field | Source |
 |-------|--------|
-| Shipper name + address | McGrocer billing address |
+| Shipper name + address | McGrocer Fulfilment Hub, Unit C, Hubert Road, Brentwood CM14 4JE (physical dispatch origin — not the billing address) |
 | Recipient name + address | Order delivery address |
 | Item descriptions | Product records |
 | HS codes | Product records, per destination |
