@@ -1,7 +1,6 @@
 # McGrocer 2.0 — Automated Operations Flow
 
 **Version 2.6 — 2026-06-03**
-**Changelog — v2.6:** CF-01 dispatch address corrected; CF-02 routing changed to flag-based parallel streams; CF-03 UPS Express Saver named as primary carrier; G-01 fraud threshold added; G-02 migration coexistence note added; G-03/G-04/G-08 config placeholders added; G-05 box dimension table added; G-06 label printing step added.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
 > **How this document is written:**
