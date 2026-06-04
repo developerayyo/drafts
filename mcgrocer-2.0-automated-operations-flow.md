@@ -1,7 +1,6 @@
 # McGrocer 2.0 — Automated Operations Flow
 
 **Version 2.7 — 2026-06-03**
-**Changelog — v2.7:** R-01 M02 flowchart updated to flag-based parallel routing; R-02 Shopping List app step 2 updated to match; R-03 shop_from field added to Appendix §K; N-01 routing flag rules subsection added to M02 with ERPNext field spec, default-setter rules, Kendamil slot rule, and config owners.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
 > **How this document is written:**
