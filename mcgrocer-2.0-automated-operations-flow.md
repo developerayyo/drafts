@@ -1,6 +1,7 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 2.7 — 2026-06-03**
+**Version 2.8 — 2026-06-04**
+**Changelog — v2.8:** Aisha PM gap analysis fully addressed (37 gaps) — 14 already fixed in v2.5–v2.7, 23 addressed in this version: M01 48h queue retired + DHL flag + Elite Price placeholder; M03 cancel mid-receive + Tote unavailable + missing expiry paths; M04 owner/deadline/go-no-go gate; M05 photo hard block + box override review + label sequence change management; M06 Phase 1 manual carrier path; M07 Freshdesk decision placeholder + Slack retirement plan + Chisom notification surfaces placeholder; M08 retailer return path + customs seizure comms + RTS criteria; M09 wrong item resolution path; M10 returned stock bin gate + consumables lead times; M11 weight agent retired + de minimis Chisom placeholder; M12 dashboard ownership + Shopify data strategy + go-live readiness checklist; M02 Finance cost capture placeholder + Kendamil Phase 1 interim.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
 > **How this document is written:**
@@ -624,6 +625,8 @@ Full legal text: Shipping Policy and Terms and Conditions (linked from checkout)
 | 12  | **Partial stock** → reserve the available quantity; create one **Shopping Item** for each shortfall quantity. Status: **Shopping**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `[AUTO]`   | Operations hub                              | Shopping Items created (shortfall only); status **Shopping**          |
 | 13  | **No stock** → create a Shopping Item for every order line. Status: **Shopping**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `[AUTO]`   | Operations hub                              | Shopping Items created (all lines); status **Shopping**               |
 | 14  | Every Shopping Item is assigned a routing flag: online (default) or in-store-priority. Online items are queued for the AI Shopper. In-store-priority items (e.g. Kendamil when online slots are unavailable, or items flagged by Ops) are routed directly to the Shopping List app. Both streams can run in parallel for the same order. The routing flag can be changed manually via the Shopping List app bulk action (Change Shopping Source).                                                                                                                                                              | `[AUTO]`   | Operations hub                              | Shopping Items queued: buy online                                     |
+| 14b | **DHL priority flag:** if the customer selected a DHL-specific service at checkout, the operations hub sets the order priority tier to Express automatically — the same tier used for perishable and short-shelf-life items. No separate priority field is needed; DHL-service orders enter the Express tier at order creation. [OPS TO CONFIRM — does a DHL order always mean express service was selected at checkout, or is there a separate DHL flag in Shopify that must be mapped? Operations Lead to confirm before Sprint 1. If a separate flag exists, the Frappe Engineer adds a `dhl_service_flag` boolean to the Sales Order DocType and maps it to the Express priority tier.] | `[AUTO]` | Operations hub | Priority tier set |
+| 14c | **Elite Price notification [DECISION PENDING]:** Elite Price is a pricing scenario in current ops where a premium is charged above the standard price for hard-to-find items. It is not yet mapped to a V2 notification or workflow. Three options: (a) **Fee request model:** treated the same as the extra shipping fee — ERPNext triggers a fee request email and the order is held until the customer pays. Peter builds the ERPNext trigger. Chisom builds the payment link in the account portal. (b) **Notification only:** customer is informed of the premium price and must approve before the item is shopped. Uses the existing substitute approval email template. (c) **Retired:** Elite Price is not used in V2. [OPS TO CONFIRM — which option? Once confirmed, Peter and Chisom will implement. Owner: Ops Lead + Peter + Chisom — Deadline: before M2 W1] | `[HUMAN]` pending decision | Operations hub | Pending decision |
 | 15  | **5 Shopping-Readiness Checks** — all must pass before any item is bought. The exact 5 are defined once in the [Checks Register](#checks-register): (1) DG (Dangerous Goods) £87 fee paid if required (waived for EU / Norway / Switzerland), (2) extra shipping fee paid if the order's weight exceeded the checkout estimate, (3) alcohol age + destination import confirmation on file, (4) electrical UK-specification acknowledgement on file, (5) licence/permit confirmation on file if the item requires one. Any fail → customer emailed the specific requirement → order **On hold** until resolved. | `[AUTO]`   | Operations hub → customer notifications     | Each check pass/fail recorded; Shopping released only when all 5 pass |
 
 
@@ -637,6 +640,23 @@ Full legal text: Shipping Policy and Terms and Conditions (linked from checkout)
 > use the same key generation logic before the parallel period
 > begins. sync_sales_order() is retired at M3 W11 cutover per
 > SOW-ARCH-001 v1.4.
+
+> **Retired in V2: 48-hour manual review window**
+> The old 48-hour order review queue is retired on Phase 1
+> go-live day. Every compliance check that previously required
+> manual review within 48 hours is now handled automatically:
+> fraud scoring by the Order Review Agent (AI-001), compliance
+> checks by the 3-tier Compliance Engine, and payment
+> confirmation before sourcing begins. There is no 48-hour
+> review queue in V2.
+>
+> **Cutover note for in-flight orders on go-live day:**
+> Any order currently sitting in the 48-hour manual review
+> queue at the moment of go-live must be processed manually
+> to completion before the ERPNext V2 flow takes over. The
+> Operations Lead must clear the queue before cutover begins.
+> No in-flight order should be migrated mid-review.
+> [ACTION — Owner: Operations Lead — Deadline: go-live day]
 
 ### Human escalation
 
@@ -853,6 +873,37 @@ Every Shopping Item has a `shop_from` field (values: `online` | `in_store_priori
 | Manual override | In-store Shopper or Ops uses "Change Shopping Source" bulk action in Shopping List app | `shop_from` updated via `update_shopping_source()` — logged in decision log |
 | OOS escalation | AI Shopper exhausts all online retailers | `shop_from` auto-flipped to `in_store_priority` by the operations hub — Shopping Item appears in Shopping List app |
 
+> **Phase 1 Kendamil interim (before AI Shopper exists):**
+> In Phase 1 there is no AI Shopper to automatically check
+> online slot availability. The Kendamil slot rule above
+> applies in Phase 2 only. In Phase 1, the manual shopper
+> must: (1) check Kendamil online slot availability at the
+> relevant retailers before assigning the Shopping Item
+> routing, (2) if the next available online slot is more than
+> 2 business days away, manually set shop_from to
+> in_store_priority in the operations hub before shopping
+> begins, (3) document the reason in the Shopping Item comment.
+> This is a manual process step in Phase 1 that the Operations
+> Lead must brief the shopping team on before go-live.
+> [TRAINING TASK — Owner: Operations Lead — Deadline: before
+> go-live]
+
+### In-store shopping cost capture — Finance handoff
+[PLACEHOLDER]
+
+When an in-store Shopper purchases items, the cost is entered in the Shopping List app per Shopping Item. This cost becomes the purchase record in ERPNext. The Finance reconciliation path must be confirmed before build:
+
+| Question | Answer needed from |
+|---|---|
+| Does the cost entered in the Shopping List app automatically create an ERPNext Purchase Receipt? | Finance Lead to confirm |
+| Is there a receipt upload step required in the Shopping List app (photo of physical receipt)? | Finance Lead to confirm |
+| How does the Tide Expense Card transaction reconcile against the ERPNext cost record — is this manual weekly or automated? | Finance Lead to confirm |
+| What happens if the Tide card transaction amount differs from the Shopping List app cost entry? | Finance Lead to confirm |
+
+**Current assumption:** cost entered in the Shopping List app creates a draft ERPNext Purchase Receipt per Shopping Item. The Tide card transaction reconciliation is a manual weekly Finance process (unchanged from current ops until Tide offers an API).
+
+[ACTION — Owner: Peter + Finance Lead — confirm the four questions above in a joint session before M2 W1. Deadline: before M2 W1]
+
 **ERPNext field:** `shop_from` on the Sourcing Line DocType.
 Values: `online` (default) · `in_store_priority`.
 **Function:** `update_shopping_source()` — see Appendix §J.
@@ -971,6 +1022,9 @@ An order does not need to be 100% received to proceed to packing. If **≥ 90% o
 | 10  | **≥ 90% of value received OR all non-cancelled Shopping Items received** → the operations hub flags the order as eligible to proceed to **Processing**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                            | Operations hub                          | Eligibility flag set (manager approves at the 90% threshold; auto-proceeds if all received) |
 | 11  | Order status changes to **Processing**. The warehouse team is automatically notified.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[AUTO]`                                            | Operations hub → customer notifications | Status **Processing**; warehouse notified                                                   |
 | 12  | Before the order appears in the packing queue, the operations hub automatically runs the **3 Packing Readiness Checks** (defined in the [Checks Register](#checks-register)): **(1) DG orders only:** is the £87 DG handling fee confirmed paid, and are DG packaging materials ready? **(2) All orders:** has any item passed its expiry date? If yes, the expired item is blocked and Operations is alerted. **(3) DG orders:** is the DG documentation (safety data sheet + shipper declaration) prepared? If any check fails, the order is shown with a specific blocking reason and will not appear in the packing queue until it is resolved. | `[AUTO]`                                            | Operations hub                          | 3 checks run; pass → enters packing queue; fail → blocked with reason                       |
+| 13  | **Order cancelled mid-receiving:** if an order is cancelled while items are already partially scanned and in a Tote, the operations hub automatically: (a) reverses the stock entries for all items already scanned — they return to the available Stores-M bin, (b) releases the Tote to Available status, (c) alerts the Frappe Engineer if any purchase receipts have already been posted — those must be manually reversed or flagged for Finance. The receiving step is blocked and no further scanning is allowed on the cancelled order. | `[AUTO]` reversal; `[HUMAN]` Finance flag if needed | Operations hub | Stock reversed; Tote released; Finance alerted if required |
+| 14  | **Tote unavailable (no Tote of the recommended size exists):** if the operations hub cannot assign a Tote at step 5 because no Tote of the recommended size is available: (a) the operations hub automatically assigns the next available larger Tote and notifies the warehouse associate, (b) if no Tote of any size is available, receiving is blocked and the Operations manager is alerted immediately. Receiving cannot proceed without a Tote assignment. | `[AUTO]` upgrade or `[GATE]` if none available | Operations hub | Tote assigned or block raised |
+| 15  | **Item with no readable expiry date:** if a scanned item has no barcode-readable expiry date and the item type requires an expiry date (food, supplements, any perishable): the operations hub prompts the warehouse associate to enter a manual best-before estimate based on the item's visible packaging. If no estimate can be made, the item is flagged for Operations review and cannot be allocated to any order until the review is complete and a date is entered. | `[HUMAN]` enter or flag | Operations hub | Expiry date recorded or review flag raised |
 
 
 ### Expiry management
@@ -1026,13 +1080,27 @@ Anyone — new starter or experienced — can find the right zone and complete t
 
 ### Physical Prerequisites
 
-> **These are pre-conditions for the automated flow to work. They are physical tasks, not software tasks.**
+> **These are pre-conditions for the automated flow to work.
+> They are physical tasks, not software tasks.**
 >
-> - Zone floor markings (tape + printed signs) must be in place before volume increases — zero-cost, one-day fix
-> - Dispatch Staging area must be formally defined and marked — no parcel enters until label applied and scanned
-> - Quarantine and Returns zones must be physically separated and labelled with order number + date + reason
-> - Box stock must be kept at each packing station — scale, tape, bubble wrap, void fill, box stock in fixed positions at each station
-> - Packing stations must be standardised: same layout at every station so any Warehouse associate can work any station
+> **Owner: [OPS TO CONFIRM — Operations Lead is the presumed
+> owner of all physical prerequisites. Confirm before Sprint 1.]**
+> **Deadline: All items must be complete and signed off before
+> Phase 1 ERPNext warehouse flow goes live.**
+> **Go/no-go gate: Phase 1 cannot go live until every item
+> below is ticked off on the go-live readiness checklist.
+> Peter adds this gate to the readiness checklist (see M12).**
+>
+> | Prerequisite | Status |
+> |---|---|
+> | Zone floor markings (tape + printed signs) in place for all 6 zones | [ ] |
+> | Dispatch Staging area formally defined and marked | [ ] |
+> | Quarantine and Returns zones physically separated and labelled | [ ] |
+> | Box stock at each packing station (scale, tape, bubble wrap, void fill) | [ ] |
+> | Packing stations standardised — same layout at every station | [ ] |
+>
+> [ACTION — Owner: Operations Lead — Deadline: before go-live
+> — Gate: Peter adds to go-live readiness checklist in M12]
 
 ### The Six Zones
 
@@ -1112,10 +1180,10 @@ Sealed parcel in **dispatch staging** with **internal packing reference only**; 
 | 5   | **If any item is missing from the Tote:** the associate flags it; Operations is automatically alerted; the order is blocked until the missing item is found or replaced.                                                                                                                                                                                                                                                                                                                             | `[HUMAN]` flag; `[AUTO]` alert   | Operations hub | Order blocked; Ops alerted                         |
 | 6   | **Compliance packing checks (see [Checks Register](#checks-register)).** For **DG** orders the associate must tick all of: UN-compliant DG packaging in use; Material Safety Data Sheet (MSDS) ready; shipper's declaration prepared — if any is missing, packing is blocked. For **alcohol** orders: confirm the customer's age verification and destination import confirmation are already on file. For **electrical** items: confirm the customer's UK-specification acknowledgement is on file. | `[HUMAN]` tick each              | Operations hub | Each item ticked and confirmed                     |
 | 7   | The system recommends a box size based on the total order weight and item count: Small, Medium, or Large.                                                                                                                                                                                                                                                                                                                                                                                            | `[AUTO]`                         | Operations hub | Box size recommendation shown                      |
-| 8   | Associate selects the recommended box size — or overrides it with a reason (override + reason logged for later review).                                                                                                                                                                                                                                                                                                                                                                              | `[HUMAN]`                        | Operations hub | Box selection (+ override reason) recorded         |
+| 8   | Associate selects the recommended box size — or overrides it with a reason (override + reason logged automatically). **Box size override review:** all overrides are reviewed weekly by the Operations Lead as part of the M12 weekly ops review. If the same item type is consistently overriding the same recommended size, the Operations Lead updates the box size master data in the operations hub so the recommendation improves. Peter surfaces the weekly override report on the M12 dashboard. | `[HUMAN]` selection; `[AUTO]` log | Operations hub | Box selection (+ override reason) recorded |
 | 9   | Associate wraps fragile, glass, and liquid items in bubble wrap per the standard for their category. Heavy items go at the base.                                                                                                                                                                                                                                                                                                                                                                     | `[HUMAN]`                        | Physical       | —                                                  |
 | 10  | **3 QC checks before sealing (see [Checks Register](#checks-register)):** (1) are all checklist items inside the box? (2) does the box weight look right for the contents? (3) is everything undamaged with no leaks?                                                                                                                                                                                                                                                                                | `[HUMAN]`                        | Operations hub | 3 QC checks confirmed                              |
-| 11  | **Photograph the packed parcel before sealing** — the photo must show the open box with all contents clearly visible. It is uploaded and attached to the order. This is the evidence used if a carrier damage claim is filed later (proof the parcel left the warehouse in good condition).                                                                                                                                                                                                          | `[HUMAN]` photo; `[AUTO]` stored | Operations hub | Pre-seal photo saved to the order                  |
+| 11  | **Photograph the packed parcel before sealing** — the photo must show the open box with all contents clearly visible. It is uploaded and attached to the order. This is the primary evidence used if a carrier damage claim is filed later. **This step is a hard block: if the photo upload fails or no photo is taken, the packing step cannot proceed to sealing (step 12). There is no exception path. The associate must retake and upload the photo before continuing. The "Seal box" button in the operations hub is disabled until a photo is confirmed uploaded against this order.** | `[HUMAN]` photo; `[AUTO]` stored and gate | Operations hub | Pre-seal photo saved to order; sealing blocked until confirmed |
 | 12  | Seal the box: tape all edges — top, bottom, and all four sides. No loose flaps.                                                                                                                                                                                                                                                                                                                                                                                                                      | `[HUMAN]`                        | Physical       | —                                                  |
 | 13  | Place the sealed box on the scale and read the final packed weight.                                                                                                                                                                                                                                                                                                                                                                                                                                  | `[HUMAN]`                        | Physical       | —                                                  |
 | 14  | Enter the weight (kg) and the box dimensions (length × width × height in cm).                                                                                                                                                                                                                                                                                                                                                                                                                        | `[HUMAN]`                        | Operations hub | Weight + dimensions saved                          |
@@ -1125,6 +1193,26 @@ Sealed parcel in **dispatch staging** with **internal packing reference only**; 
 | 18  | Parcel moved to **dispatch staging**; the **Tote** is released back to Available. Status: **Awaiting shipment**.                                                                                                                                                                                                                                                                                                                                                                                     | `[AUTO]`                         | Operations hub | Tote released; status **Awaiting shipment**        |
 | 19  | **Pre-dispatch checklist** before carrier booking (see [Checks Register](#checks-register)): (1) parcel data complete; (2) DG documents physically on the parcel if a DG order. Fail → operations manager alerted. Pass → the **dispatch agent** starts M06.                                                                                                                                                                                                                                         | `[AUTO]`                         | Operations hub | Checklist result; dispatch agent triggered on pass |
 
+> **Change management note — label printing sequence:**
+> In the current manual process, carrier labels are sometimes
+> printed at the packing stage. In V2 this is incorrect:
+> carrier labels are only created in M06, after packing is
+> complete. The "Print carrier label" option must not be
+> available at the M05 packing stage in the operations hub
+> ERPNext interface. The Frappe Engineer must disable or hide
+> any label-printing button on the Delivery Note form until
+> the order has reached the Awaiting Shipment status and M06
+> has been triggered. Without this ERPNext control, warehouse
+> staff familiar with the old sequence will revert to printing
+> labels during packing — bypassing the M06 dispatch agent
+> flow.
+> **Staff training:** the Operations Lead must brief all
+> warehouse associates on the new sequence (pack → M06
+> triggers label) before go-live day.
+> [BUILD TASK — Owner: Frappe Engineer — Disable label button
+> in ERPNext at packing stage — Deadline: Sprint 1]
+> [TRAINING TASK — Owner: Operations Lead — Deadline: before
+> go-live]
 
 Box dimensions must be loaded into the ERPNext Box Size master before go-live. The volumetric weight check in step 15 (L×W×H ÷ 5,000) uses these dimensions. Without them the check cannot compute. The Operations Lead must provide the actual warehouse box specs and the Frappe Engineer loads them.
 
@@ -1200,6 +1288,18 @@ For orders **Awaiting shipment**, the **dispatch agent** runs the pre-label comp
 ### What starts this module
 
 Status **Awaiting shipment**; the pre-dispatch checklist from M05 passed.
+
+### Phase 1 vs Phase 2 — carrier booking
+
+| | Phase 1 (ERPNext backend) | Phase 2 (AI agents) |
+|---|---|---|
+| Who books the carrier | Shipping officer manually in ShipStation | Dispatch Agent (AI-010) automatically |
+| How the label is created | Manual booking in ShipStation → tracking entered in operations hub → label printed via step 11a | Dispatch Agent calls ShipStation API → label created automatically |
+| ERPNext Delivery Note | Shipping officer posts the Delivery Note manually after entering tracking and label details | Dispatch Agent creates and posts the Delivery Note automatically |
+| FDA Prior Notice (US food) | Shipping officer files manually via the FDA PNSI portal (4-hour SLA) then enters the confirmation number in the Delivery Note | Dispatch Agent submits via FDA API; hard gate prevents label without confirmation number |
+
+**Phase 1 transition note:** the Phase 1 manual ShipStation booking path is functionally identical to the current manual flow. The operations hub Delivery Note DocType must support manual entry of: tracking number, carrier name, carrier service, label cost, and (for US food) FDA Prior Notice confirmation number. These fields must be built by the Frappe Engineer in Sprint 1 regardless of Phase 2 automation.
+[BUILD TASK — Owner: Frappe Engineer — Deadline: Sprint 1]
 
 ### What is produced
 
@@ -1318,6 +1418,25 @@ Every important event in the order journey triggers an automatic email to the cu
 | Return approved                       | Return logistics instructions                           | Immediately                 |
 | Refund processed                      | Refund confirmation with amount and deduction breakdown | Immediately                 |
 
+> **Storefront account portal pages — shared with Chisom:**
+> Several notifications above require the customer to take an
+> action via a link in the email. Peter owns the ERPNext event
+> trigger and the email content. Chisom owns the account
+> portal page the link points to. The following pages must be
+> built by Chisom and confirmed live before the corresponding
+> notification can be sent:
+>
+> | Notification | Link destination | Chisom builds |
+> |---|---|---|
+> | DG fee request | DG fee payment page | [PLACEHOLDER — confirm URL and page spec with Chisom] |
+> | Extra shipping fee request | Extra shipping payment page | [PLACEHOLDER — confirm URL and page spec with Chisom] |
+> | Alcohol — age + import confirmation | Alcohol confirmation page | [PLACEHOLDER — confirm URL and page spec with Chisom] |
+> | Electrical — UK spec acknowledgement | Electrical acknowledgement page | [PLACEHOLDER — confirm URL and page spec with Chisom] |
+> | Restricted item — document upload | Document upload page | [PLACEHOLDER — confirm URL and page spec with Chisom] |
+>
+> [ACTION — Owner: Peter (ERPNext trigger) + Chisom (portal
+> pages) — confirm page URLs and specs in joint session before
+> M2 W1]
 
 ### CS role
 
@@ -1326,6 +1445,40 @@ CS does not message the warehouse to ask for status. They open the operations hu
 When CS needs the warehouse to take an action (hold, re-ship, address change), they create a **structured task in the operations hub** with: order number + action type + urgency. The warehouse sees this in their task queue.
 
 When CS needs to update the **customs outcome** on an order (e.g. customs held, seized), they update the field directly in the operations hub — this feeds anomaly detection in M12.
+
+### Freshdesk in V2 — decision pending
+
+Freshdesk is McGrocer's current customer support ticketing system. CS uses it for all inbound customer requests. Its role in V2 must be decided before Phase 1 CS workflow is designed — CS cannot abandon their ticketing system on go-live day.
+
+Three options:
+
+| Option | What it means | Who builds |
+|---|---|---|
+| (a) Integrate | Freshdesk connects to ERPNext via API. CS sees live order status inside Freshdesk without switching tools. | Peter builds the ERPNext → Freshdesk integration |
+| (b) Parallel | Freshdesk continues standalone. CS switches between Freshdesk (tickets) and the operations hub (order status). | No build needed — operational change only |
+| (c) Replace | Freshdesk is retired. All CS ticketing moves into the operations hub. | Peter builds a CS ticketing module in ERPNext |
+
+[OPS TO CONFIRM — which option? This must be resolved before Phase 1 CS workflow design begins. Owner: Ops Lead — Deadline: before Sprint 1]
+
+**Current placeholder:** until the decision is made, the CS role section above assumes Option (b) Parallel — CS reads the operations hub for order status and continues using Freshdesk for ticket management. This is the lowest-risk default and requires no build work.
+
+### Slack channel retirement plan
+
+The following five operational Slack channels are replaced by the operations hub in V2. They must be retired in a controlled sequence — ERPNext task queues and dashboards must be live and confirmed working before any channel is closed.
+
+| Slack channel | Replaced by | Retire on |
+|---|---|---|
+| Operations-Order-Management | Operations hub order queue + status dashboard | [OPS TO CONFIRM] |
+| Operations-Returns | Operations hub Returns queue + structured task | [OPS TO CONFIRM] |
+| Approve-Compliance | Operations hub compliance check result + hold queue | [OPS TO CONFIRM] |
+| Shopping-In-Store | Shopping List app (Shopper App) | [OPS TO CONFIRM] |
+| Shopping-Online | AI Shopper status in operations hub | [OPS TO CONFIRM] |
+
+**Retirement sequence rule:** Peter confirms the relevant operations hub feature is live and tested. Operations Lead confirms staff are trained on it. Then and only then does the Slack channel close. No channel closes before its ERPNext replacement is confirmed working.
+
+**Team communication:** Operations Lead sends a team message at least 5 business days before each channel closes with the date, the replacement, and a short how-to guide.
+
+[OPS TO CONFIRM — retirement dates for each channel. Owner: Operations Lead (execution) + Peter (ERPNext readiness confirmation) — Deadline: staggered through Phase 1 go-live]
 
 ### M07 Flowchart
 
@@ -1404,14 +1557,16 @@ A return request from the customer (via email or support desk ticket), a courier
 | 1   | Return request arrives — from the customer (email or support desk ticket) or from a courier notification (refusal, damage, loss).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `[HUMAN]` CS / `[AUTO]` if a courier pushes status | Support desk → operations hub             | Return request logged                                      |
 | 2   | **Return eligibility check (3 checks — see [Checks Register](#checks-register)):** (1) **Is this item returnable?** Never returnable: opened food, baby food, infant nutrition, personal care/hygiene, perishables, temperature-sensitive items, short shelf-life products, custom orders, and customer-requested specialist products. (2) **Was the problem reported within 48 hours of confirmed delivery?** The 48-hour clock starts the moment tracking shows the parcel delivered; after 48 hours McGrocer cannot accept claims. (3) **Is this actually a customs liability?** If the parcel was refused/held by customs, the customer is the Importer of Record under McGrocer's DDU (Delivered Duty Unpaid) model — all customs charges, return courier costs, and handling fees are the customer's responsibility. | `[COMPLY]`                                         | Compliance service                        | Return eligibility determined                              |
 | 3   | **Return not valid** — any of the 3 checks failed → the customer is automatically emailed the specific reason and the relevant policy; the case is logged and closed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `[AUTO]`                                           | Operations hub → customer notifications   | Rejection logged                                           |
+| 3a  | **Customs seizure or destruction path:** if the customs outcome field on the order is set to "Seized" or "Destroyed" (updated by CS in M07 when the carrier or customs authority notifies McGrocer): the operations hub automatically sends a notification to the customer stating that the shipment has been seized or destroyed by customs authorities, that no refund or replacement applies (customer is the Importer of Record under McGrocer's DDU model and is responsible for destination import compliance), and that the case is now closed. CS is automatically notified that the automated message has been sent. The case record is updated and closed in the operations hub. No manual CS action is required unless the customer disputes the closure. | `[AUTO]` trigger + email | Operations hub → customer notifications | Seizure/destruction notification sent; case closed |
 | 4   | **Eligible** → CS requests photo evidence from the customer (item + packaging + barcode + expiry).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `[HUMAN]` CS                                       | Operations hub                            | Evidence logged against the return                         |
-| 5   | **Parcel not yet delivered** (still in transit): CS authorises **RTS (Return to Sender)** with the courier.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `[HUMAN]` CS                                       | Carrier platform → operations hub         | RTS logged                                                 |
+| 5   | **RTS (Return to Sender) authorisation — parcel still in transit:** CS may authorise RTS only when ALL of the following conditions are met (checklist enforced in the operations hub — CS cannot trigger RTS until all are ticked): **(1)** The customer has accepted the return in writing (email or support desk ticket on record), OR **(2a)** The customer has not responded after the agreed response window AND **(2b)** The item is of recoverable value (above the write-off threshold) AND **(2c)** The courier has notified McGrocer that the parcel will be abandoned, destroyed, or returned automatically if not actioned within a stated deadline. If all conditions are not met, CS waits or escalates to the Operations manager. RTS is never authorised on a parcel the customer still expects to receive. | `[HUMAN]` CS — checklist in operations hub | Carrier platform → operations hub | RTS authorisation recorded with checklist confirmation |
 | 6   | **Parcel delivered**: a return shipment is created — the dispatch agent books a return label. **Default:** ShipStation. **USA (if ShipStation unavailable):** Operations may use **Shippo** or another return channel (same as current manual flow) and enter tracking manually.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `[AGENT]` or `[HUMAN]` Ops                         | Dispatch agent / alternate return channel | Return shipment record created                             |
 | 7   | Returned parcel arrives at the warehouse.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Physical                                           | —                                         | —                                                          |
 | 8   | Warehouse associate scans the return into the triage form (Return mode of the Receiving app).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `[HUMAN]`                                          | Operations hub                            | Return record started                                      |
 | 9   | Associate scores the item condition 1–5 on the triage form.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `[HUMAN]`                                          | Operations hub                            | Condition score saved                                      |
 | 10  | The decision tree runs automatically on the condition score.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[AUTO]`                                           | Operations hub                            | Decision: Restock / Quarantine / Carrier Claim / Write-off |
-| 11  | **Score 2**: item moved to the Quarantine zone → operations manager reviews and decides: retailer return, write-off, or disposal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `[HUMAN]` Ops                                      | Operations hub                            | Decision recorded                                          |
+| 11  | **Score 2 — Operations manager decision (Quarantine zone):** the item is physically moved to Zone 4 (Quarantine). The operations manager reviews the item and selects one of three outcomes in the operations hub Return Triage Record: **(a) Retailer return for credit:** the shopper initiates a return with the original retailer. The operations hub creates a Retailer Return Record tracking: retailer name, order ref, return reason, return shipping method, expected credit amount, and credit received date. Finance is notified of the expected credit. The item stays in Quarantine until the retailer confirms the return. This path is used for high-value items (electronics, specialty goods) where the retailer accepts returns and the credit recovers meaningful value. **(b) Write-off at cost:** item is written off in the operations hub. Full refund issued to the customer. Finance is notified of the write-off amount. Item disposed. **(c) Disposal:** item has no recovery value and is not returnable to the retailer. Disposed. Partial or no refund depending on circumstances. CS notifies the customer. The decision (a, b, or c), the justification, and the item value are all recorded on the Return Triage Record for Finance reconciliation and M12 quality tracking. | `[HUMAN]` Ops decision | Operations hub | Decision + justification recorded on Return Triage Record |
+| 11a | **Retailer return in progress (if Option a selected):** shopper contacts the retailer and initiates the return process. All retailer communications, return tracking reference, and expected credit timeline are logged against the Retailer Return Record in the operations hub. Finance reviews open Retailer Return Records weekly. The item remains in Quarantine until the retailer credit is received and confirmed. | `[HUMAN]` Shopper | Operations hub | Retailer return progress tracked |
 | 12  | Refund calculated automatically: order value minus all deductions (return shipping + customs fees + handling).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                           | Operations hub                            | Refund amount on the return record                         |
 | 13  | Refund authorisation triggered from the triage output — CS receives a notification, not an approval request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[AUTO]`                                           | Operations hub                            | Refund initiated                                           |
 | 14  | All return data logged: reason · condition score · category · route · outcome.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                           | Operations hub                            | Feeds the monthly returns review dashboard                 |
@@ -1488,6 +1643,19 @@ When something goes wrong after dispatch — a parcel is lost, damaged by the ca
 | 7   | **Carrier invoice check:** when a carrier invoice arrives, the operations hub automatically compares every charge against the original booking quote. If any charge is higher than quoted, CS is alerted with a pre-prepared dispute draft ready to send.                                                          | `[AUTO]` detect; `[HUMAN]` CS submits | Operations hub                  | Discrepancy flagged       |
 | 8   | **Pattern detection:** if the same product, route, or carrier generates more than 2 incidents in the same month, the operations hub automatically flags it for investigation — so recurring problems are not treated as one-offs.                                                                                  | `[AUTO]`                              | Operations hub                  | Investigation flag raised |
 
+### Wrong item shipped — resolution path
+
+When a customer reports receiving a wrong item, the following steps apply in the operations hub:
+
+| # | Step | Owner | System | Data captured |
+|---|---|---|---|---|
+| 1 | CS receives customer report. CS requests photo evidence from the customer: photo of the wrong item received, the label, and the packaging. | `[HUMAN]` CS | Operations hub | Evidence request logged |
+| 2 | CS confirms wrong item with photo evidence. Logs the incident in the operations hub Incident Record with type: "Wrong item shipped". | `[HUMAN]` CS | Operations hub | Wrong-item incident created |
+| 3 | Warehouse investigates the packing error: checks the M05 pre-seal photo to confirm what was packed, and checks the packing station log for the time of packing. Root cause recorded in the Incident Record (e.g. mis-pick, mis-scan, mix-up at multi-order station). | `[HUMAN]` Warehouse | Operations hub | Root cause recorded |
+| 4 | If the correct item is available in stock or can be re-shopped within the order SLA: replacement is shipped. A new Delivery Note is created for the replacement. Customer is notified automatically. | `[AUTO]` if in stock; `[HUMAN]` Ops if re-shop needed | Operations hub | Replacement shipment created |
+| 5 | A return label is issued for the wrong item via ShipStation. Customer is emailed the return label and instructions. | `[AGENT]` or `[HUMAN]` Ops | Dispatch agent / ShipStation | Return label issued |
+| 6 | Full refund or replacement confirmed with the customer depending on their preference. | `[AUTO]` | Operations hub → customer notifications | Refund or replacement confirmed |
+| 7 | Packing error recorded for M12 quality tracking. Repeat wrong-item incidents from the same packing station or associate trigger the pattern detection rule (>2 incidents/month). | `[AUTO]` | Operations hub | Packing quality record updated |
 
 ---
 
@@ -1540,7 +1708,7 @@ Overflow above the limit is split into the next retailer checkout automatically.
 | FIFO allocation    | Order fulfilment | Oldest stock allocated first                                            |
 | 7-day expiry alert | Daily 6 AM job   | Alert to warehouse + Operations                                         |
 | Expiry reached     | Daily 6 AM job   | Stock auto-deducted + Operations alerted + item blocked from new orders |
-| Return received    | After triage     | Returned stock not re-entered until condition confirmed                 |
+| Return received    | After triage     | Returned items land in the **Returns bin** (a separate ERPNext bin from Stores-M). They can only be transferred to Stores-M after the Return Triage Record on the linked return order is set to a restockable condition score (4 or 5). **Manual bin transfer from Returns to Stores-M is blocked at the ERPNext permission level before triage is complete.** The Frappe Engineer must configure this permission gate in Sprint 1: the bin transfer button or stock entry for the Returns bin must require the linked Return Triage Record to be in "Restockable" status before it is permitted. This prevents returned stock — which may be damaged, expired, or incorrectly assessed — from entering active stock before the triage decision is made. [BUILD TASK — Owner: Frappe Engineer — Deadline: Sprint 1] |
 
 
 ### Packaging consumables management
@@ -1562,6 +1730,19 @@ Packaging consumables — boxes, tape, bubble wrap, void fill, shipping labels �
 
 
 When any consumable drops below its trigger point, the operations hub automatically alerts the warehouse associate and operations manager. No manual checking needed.
+
+**Emergency stockout contingency:**
+
+Each consumable record in the operations hub must include two reorder thresholds — not one:
+
+| Threshold | What it means | Alert sent to |
+|---|---|---|
+| Standard reorder point | Normal replenishment trigger — stock to arrive before running out at current usage rate | Warehouse associate + Operations manager |
+| Emergency threshold (reorder point minus lead time buffer) | Stock will run out before a normal order can arrive — urgent action needed | Operations manager (urgent alert, separate from standard reorder) |
+
+The lead time for each consumable (how many days between placing an order and receiving stock) must be entered in the operations hub by the Operations Lead before go-live. Without lead times, the emergency threshold cannot be calculated.
+
+[ACTION — Owner: Operations Lead — enter supplier lead times in operations hub before go-live. Deadline: before M3 W9]
 
 ### Weekly cycle counts
 
@@ -1626,6 +1807,15 @@ McGrocer ships **DDU — Delivered Duty Unpaid**. This means:
 | Return item eligibility                       | M08    | Compliance service (return-eligibility check) |
 | DDU liability for customs refusals            | M08    | Compliance service (return-eligibility check) |
 
+### AI weight estimation agent — status in V2
+
+The AI weight estimation agent was used in current ops to estimate item and order weight for shipping fee validation and courier booking before actual weights were available. In V2:
+
+- M05 step 14 captures the **actual measured weight** of the packed parcel before any label is created.
+- M01 shipping fee validation at order entry uses the **SAN-4 Weight Predict ML model** (Layer 0 Sanitisation pipeline) to estimate weight at the product level for the landed cost display.
+- The standalone AI weight estimation agent used in current ops is **retired in V2** — it is replaced by SAN-4 at the product level and actual measurement at the packing level.
+
+[OPS TO CONFIRM — are there any edge cases in current ops where the weight estimation agent is used outside of shipping fee validation and courier booking that are not covered by SAN-4 + M05 actual weight? Owner: Ops Lead — Deadline: before Sprint 1]
 
 ### HS code management
 
@@ -1652,6 +1842,25 @@ Every destination country has a de minimis threshold — the order value below w
 
 
 De minimis data is stored in the operations hub for every destination McGrocer ships to. At M01, the compliance service uses this data when assessing orders. At M06, the commercial invoice always states the actual sale price — McGrocer never under-declares values on customs documents.
+
+> **De minimis data flow — shared with Chisom [PLACEHOLDER]:**
+> Peter stores de minimis thresholds in the operations hub
+> (ERPNext) per destination country. Chisom displays the
+> landed cost estimate at checkout via Zonos. The data flow
+> between these two systems must be confirmed before build:
+>
+> **Option A:** ERPNext de minimis data feeds Zonos directly
+> via API — single source of truth, no inconsistency risk.
+> Peter builds the ERPNext → Zonos data feed.
+>
+> **Option B:** Zonos maintains its own de minimis thresholds
+> independently. ERPNext and Zonos are kept in sync manually.
+> Risk: they can drift and show different duty calculations.
+>
+> [ACTION — Owner: Peter + Chisom — confirm which option in
+> joint session. Deadline: before M2 W1. Until confirmed,
+> assume Option B (independent) as the default, but flag the
+> consistency risk to Aisha.]
 
 ### Customs outcome tracking
 
@@ -1715,6 +1924,80 @@ M06 — compliance service final dispatch check
 ### Objective
 
 The operations lead starts every morning knowing how many orders are in queue, how many exceptions are open, what yesterday's dispatch SLA was, and how many returns and customs holds are outstanding — without asking anyone. Every piece of operational data is captured in a structured format.
+
+### Dashboard ownership
+
+The M12 operations dashboard is the single source of truth for daily operational performance. Named ownership is required for accuracy to be maintained.
+
+| Dashboard / alert | Owner | Escalation if not actioned |
+|---|---|---|
+| Daily ops digest (8:30 AM) | Operations Lead reviews every morning | If no review within 2 hours: escalated to CEO |
+| SLA breach alert (12h warning) | Operations Lead | If not actioned within 1 hour of alert: escalated to CEO |
+| Dispatch cutoff risk alert (1:30 PM) | Warehouse Supervisor | If not actioned by 1:45 PM: escalated to Operations Lead |
+| Compliance rejection spike | Operations Lead | Immediate escalation to Compliance Lead |
+| Carrier invoice discrepancy | CS Lead | If not resolved within 24h: escalated to Operations Lead |
+
+**Peter builds the escalation rule in ERPNext:** any alert not actioned within its SLA window automatically sends a second notification to the named escalation owner.
+
+[OPS TO CONFIRM — named owners in the table above are placeholders. Operations Lead to confirm the correct owner for each alert before Sprint 1. Owner: Ops Lead — Deadline: before Sprint 1]
+
+### Shopify historical data strategy [DECISION PENDING]
+
+McGrocer has approximately 4 years of order history in Shopify and 1 year in ERPNext. CS must be able to look up any order from the last 4 years after cutover. Three options:
+
+| Option | What it means | Who decides feasibility |
+|---|---|---|
+| (a) Migrate to ERPNext | Shopify order history migrated into ERPNext (selected years, selected fields). CS uses ERPNext for all order lookup going forward. | Peter (migration effort) + Head of Engineering (feasibility) |
+| (b) Shopify read-only post-cutover | Shopify kept on Pause plan (read-only) for CS lookup of historical orders. New orders only in ERPNext. | Aisha (cost approval) + Ops Lead (CS workflow) |
+| (c) Export to archive | Shopify order history exported to a structured archive (CSV or BigQuery). CS uses the archive for historical lookups. | Peter (export) + Aisha (archive format) |
+
+[DECISION PENDING — Owner: Aisha (overall decision) + Peter (technical feasibility per option) — Deadline: before M3 W9. Until decided, assume Option (b) Shopify read-only as the default — it requires no build work and preserves CS access.]
+### Go-live readiness checklist
+
+This is the gate for Phase 1 go-live. Nothing goes live until every item below is confirmed. Peter owns the ERPNext items. Aisha owns the overall cutover plan.
+
+**ERPNext readiness (Peter signs off):**
+
+| Item | Status |
+|---|---|
+| All ERPNext custom fields from SOW ARCH-001 §11 created (Day 1 fields) | [ ] |
+| Box dimensions loaded into ERPNext Box Size master (Ops Lead provides values) | [ ] |
+| Packaging consumables minimum stock levels + lead times entered (Ops Lead) | [ ] |
+| Write-off threshold and auto-refund limit configured (Finance Lead confirms values) | [ ] |
+| Spend cap configured in operations hub retailer settings (Ops Lead confirms value) | [ ] |
+| Substitute price threshold configured (Ops Lead confirms %) | [ ] |
+| Fraud score threshold (0.70) configured on Order Review Agent | [ ] |
+| HS codes assigned to top 100 SKUs by order volume in ERPNext | [ ] |
+| IATA/IMDG DG classification assigned to all DG-flagged SKUs | [ ] |
+| Returns bin created in ERPNext; permission gate blocking transfer before triage confirmed | [ ] |
+| Label printing disabled at M05 packing stage in ERPNext UI | [ ] |
+| Routing flag (shop_from) field on Shopping Item DocType confirmed | [ ] |
+| Kendamil slot threshold configured in operations hub settings | [ ] |
+
+**Physical warehouse readiness (Ops Lead signs off):**
+
+| Item | Status |
+|---|---|
+| All 6 zone floor markings in place | [ ] |
+| Box stock at every packing station | [ ] |
+| Packing stations standardised | [ ] |
+| All warehouse associates trained on V2 sequence (pack → M06 label) | [ ] |
+
+**Migration readiness (Peter + Aisha):**
+
+| Item | Status |
+|---|---|
+| 48h manual review queue cleared | [ ] |
+| Shopify → ERPNext parallel window confirmed with defined end date | [ ] |
+| Rollback trigger defined (what condition triggers reverting to Shopify-only) | [ ] |
+| Slack channels confirmed for retirement sequence (Ops Lead) | [ ] |
+| Freshdesk integration decision confirmed (Ops Lead) | [ ] |
+| Shopify historical data strategy confirmed (Aisha) | [ ] |
+| In-flight order handling on go-live day documented | [ ] |
+
+**Cutover plan owner: Aisha**
+**ERPNext readiness owner: Peter**
+[ACTION — produce this as a standalone tracked document (Google Sheet or Notion) before sprint planning begins. Owner: Peter (ERPNext items) + Aisha (overall plan)]
 
 ### Daily ops digest
 
@@ -2047,5 +2330,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v2.5 — 2026-06-03*
+*McGrocer 2.0 — Automated Operations Flow — v2.8 — 2026-06-04*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
