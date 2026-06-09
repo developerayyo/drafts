@@ -2,7 +2,7 @@
 
 **Version 3.4 — 2026-06-09**
 **Changelog — v3.4:** STRESS-OPS closure — 90% auto-proceed if outstanding ≤£30; spend-cap deputy + 4h timeout; carrier PI at actual cost + 2% exception; M03-3 retailer credit cross-ref; review brief + findings closure register.
-**Changelog — v3.3:** Order COGS from AI checkout success (BC4) — no email for purchase price; M03 step 7 auto-submits PI from `actual_purchase_price`; Email Monitor scoped to OPEX finance inbox only (B-NEW-02) with human gap-fill; CEO brief in mcgrocer-review-brief.md.
+**Changelog — v3.3:** Order COGS from AI checkout success (BC4) — no email for purchase price; M03 step 7 auto-submits PI from `actual_purchase_price`; Email Monitor scoped to OPEX finance inbox only (B-NEW-02) with human gap-fill; CEO brief in mike-review-brief.md.
 **Changelog — v3.2:** Finance Architecture Alignment — ERPNext sole ledger (no Xero); Medusa-only PSP with Payment Entry from order.placed sync; agent-first finance model + exception queue; M13 Finance & ledger module; online-first shopping; OPEX email-assisted (B-NEW-02) + human gap-fill; assumptions register for CEO sign-off.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
@@ -637,7 +637,7 @@ McGrocer uses two systems the same way Shopify + ERPNext work today: **Medusa ho
 | Three-way match | `actual_purchase_price` vs PR grand_total vs bank — auto-pass if ≤2% variance | Variance >2% → **Finance exception queue** |
 | **Non-order OPEX** (rent, payroll, utilities, insurance) | **Email Monitor** drafts PI/JE from finance inbox (B-NEW-02); **Finance posts manually** anything the email agent missed | Human gap-fill always available |
 
-**Email Monitor (B-NEW-02):** Used for **non-order OPEX only** — rent, utilities, payroll-related bills, SaaS invoices arriving in the finance inbox. Agent drafts ERPNext documents; Finance reviews and posts. Anything the email agent does not capture, Finance posts manually. **Not used for order COGS** — online purchase price comes from the AI Shopper at checkout (BC4), not from retailer confirmation emails. See [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md).
+**Email Monitor (B-NEW-02):** Used for **non-order OPEX only** — rent, utilities, payroll-related bills, SaaS invoices arriving in the finance inbox. Agent drafts ERPNext documents; Finance reviews and posts. Anything the email agent does not capture, Finance posts manually. **Not used for order COGS** — online purchase price comes from the AI Shopper at checkout (BC4), not from retailer confirmation emails. See [mike-review-brief.md](../mcgrocer-dev-docs/mike-review-brief.md).
 
 **Finance dashboard:** ERPNext reports (P&L, margin/order, AR/AP, VAT liability) plus 3 metrics in the M12 daily digest (B16/B17) once posting hooks are live.
 
@@ -979,7 +979,7 @@ When an in-store Shopper purchases items, the following must happen to close the
 3. On warehouse receive (M03): Purchase Receipt uses `actual_purchase_price`; Purchase Invoice is **auto-created and auto-submitted** from price + input VAT category template (B4) unless BC6 blocks or variance >2% routes to Finance exception queue (see [M13](#m13--finance--ledger)).
 4. A **reimbursement liability** is created in ERPNext if the purchase was on a personal card (not the Tide card) — Staff Reimbursements - M account (F7 confirmed).
 
-**Retailer delivery on online checkouts:** When the AI Shopper checks out online, retailer delivery to the warehouse is included in the checkout total. BC4 captures per-item prices from the checkout success response; any checkout-level delivery fee is **allocated proportionally across items** in the grouped checkout (assumption A-COGS-04 in [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md)).
+**Retailer delivery on online checkouts:** When the AI Shopper checks out online, retailer delivery to the warehouse is included in the checkout total. BC4 captures per-item prices from the checkout success response; any checkout-level delivery fee is **allocated proportionally across items** in the grouped checkout (assumption A-COGS-04 in [mike-review-brief.md](../mcgrocer-dev-docs/mike-review-brief.md)).
 
 ### Actual purchase price capture — critical fix (BC2–BC6)
 
@@ -2308,7 +2308,7 @@ A 15-minute standing meeting, weekly. The operations manager reviews one operati
 
 ## M13 — Finance & ledger
 
-**Cross-cutting module.** Finance postings are **triggered inside** M01 (revenue), M02/M03 (COGS), M06 (carrier cost), M08 (refunds), and M09 (claim recoveries). M13 documents the **ledger layer** those modules feed — it does not duplicate their operational steps. See also [Finance Engine](#finance-engine--cross-layer-accounting) and [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md) for CEO sign-off items.
+**Cross-cutting module.** Finance postings are **triggered inside** M01 (revenue), M02/M03 (COGS), M06 (carrier cost), M08 (refunds), and M09 (claim recoveries). M13 documents the **ledger layer** those modules feed — it does not duplicate their operational steps. See also [Finance Engine](#finance-engine--cross-layer-accounting) and [mike-review-brief.md](../mcgrocer-dev-docs/mike-review-brief.md) for CEO sign-off items.
 
 ### Objective
 
@@ -2361,7 +2361,7 @@ Rent, payroll, utilities, insurance, accounting fees, and other **non-order** ex
 
 **Order COGS is not in this path.** Tesco/Sainsbury's purchase prices for customer orders are captured by the AI Shopper at checkout (BC4) or the in-store app (BC3) — not parsed from retailer emails.
 
-See [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md).
+See [mike-review-brief.md](../mcgrocer-dev-docs/mike-review-brief.md).
 
 ### Bank reconciliation and VAT cycle
 
