@@ -1,7 +1,9 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 2.9 — 2026-06-09**
-**Changelog — v2.9:** Finance Engine added as first-class cross-layer system (360° Master v2); Zonos replaced with Compliance Engine throughout; Xero named as statutory ledger; M01 Sales Invoice auto-raise + idempotency extension; M02 in-store receipt → Purchase Invoice + reimbursement liability; M02 substitute price delta invoice path; M02 both-stream race condition fix; M03 Purchase Receipt → Purchase Invoice (COGS anchor) + FIFO costing method declared; M03 + M10 expiry removal → Stock Write-off to P&L; M06 carrier cost → Purchase Invoice per order; M06 Compliance Engine emits duty and output VAT separately; M08 Credit Note + COGS reversal on restock + write-off to P&L + customs seizure write-off; M08 retailer return → AR receivable; M09 carrier claim recovery → other income Journal Entry; M10 stock costing method section + cycle-count discrepancy + slow-mover write-down; M11 output VAT table added; M12 finance dashboard + 3 financial metrics in daily digest + finance items in go-live checklist.
+**Version 3.4 — 2026-06-09**
+**Changelog — v3.4:** STRESS-OPS closure — 90% auto-proceed if outstanding ≤£30; spend-cap deputy + 4h timeout; carrier PI at actual cost + 2% exception; M03-3 retailer credit cross-ref; review brief + findings closure register.
+**Changelog — v3.3:** Order COGS from AI checkout success (BC4) — no email for purchase price; M03 step 7 auto-submits PI from `actual_purchase_price`; Email Monitor scoped to OPEX finance inbox only (B-NEW-02) with human gap-fill; CEO brief in mcgrocer-review-brief.md.
+**Changelog — v3.2:** Finance Architecture Alignment — ERPNext sole ledger (no Xero); Medusa-only PSP with Payment Entry from order.placed sync; agent-first finance model + exception queue; M13 Finance & ledger module; online-first shopping; OPEX email-assisted (B-NEW-02) + human gap-fill; assumptions register for CEO sign-off.
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
 > **How this document is written:**
@@ -67,6 +69,7 @@ Not every module is a discrete step in the order journey. Four are cross-cutting
 | **M10** — Inventory & Stock Management     | Always-on rules engine | Stock check (3 paths) embedded in M01; expiry automation in M10 · M12 background jobs subgraph                                        |
 | **M11** — Compliance, Duties & Customs     | Cross-cutting engine   | Every `[COMPLY]` node in the chart (M01 order-entry check, M06 pre-label check, M08 return-eligibility check) is M11's engine running |
 | **M12** — Operational Intelligence         | Always-on monitoring   | Daily ops digest and expiry alerts in M10 · M12 background jobs subgraph; SLA metrics recorded at end of M06                          |
+| **M13** — Finance & ledger                 | Cross-cutting ledger   | Parallel track to fulfilment — order-triggered ERPNext postings (M01/M02/M03/M06/M08/M09), exception queue, OPEX manual SOP, bank/VAT cycle |
 
 
 > **How to read this chart:** This is the complete journey of every McGrocer order — from customer payment to delivery, returns, and daily intelligence. Every decision, every compliance check, every escalation path, and every status change is shown. Nothing is hidden. Every box states what happens, who does it, and what it produces.
@@ -110,7 +113,7 @@ flowchart TD
         P1 --> ERPVAL{5 Shopping-Readiness Checks — all must pass before any item is bought\n1 DG fee — £87 paid if DG items present — auto-waived for EU / Norway / Switzerland\n2 Extra shipping fee — paid if estimated weight exceeds flat-rate threshold\n3 Alcohol — customer confirmed 18+ AND CE Tier 1 confirms destination permits import\n4 Electrical — customer confirmed UK spec: 3-pin BS1363 plug — 230V — 50Hz\n5 Restricted items — customer uploaded required licence or permit document}
         P2 --> ERPVAL
         P3 --> ERPVAL
-        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for Sourcing Router — AI Shopper\nRouting flag per item: online by default or in-store-priority — both streams parallel per 360° Layer 3 architecture]
+        ERPVAL -->|All 5 pass| SHOPASSIGN[AUTO: All Shopping Items queued for AI Shopper — online first\nshop_from = online by default\nIn-store only after OOS escalation or Kendamil slot rule]
         ERPVAL -->|Any check fails| CE2BLOCK[AUTO: Customer emailed with exact requirement and action link\nDG fee payment link — extra shipping payment link\nalcohol or electrical confirmation link — document upload link\nOrder: On hold]
         CE2BLOCK --> CUSTACT[HUMAN: Customer completes the required action\nPays fee — OR confirms via portal — OR uploads document]
         CUSTACT --> ETERECHECK{Operations hub detects action\nFailing check now passes?}
@@ -325,7 +328,7 @@ These are the **customer-facing order statuses** used everywhere in this documen
 
 | Term                                                     | What it means (like Shopify / Amazon, plus McGrocer-specific words we keep)                                                                                                                              |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Storefront**                                           | McGrocer website — browse, Cart, checkout, pay (replaces Shopify)                                                                                                                                        |
+| **Storefront**                                           | McGrocer website on Medusa v2 — browse, Cart, checkout, pay                                                                                                                                        |
 | **Order**                                                | The customer's purchase — one checkout, one delivery address                                                                                                                                             |
 | **Order line**                                           | One product on the order (SKU, quantity, price)                                                                                                                                                          |
 | **Cart**                                                 | What the customer builds before checkout (one canonical word — never "basket")                                                                                                                           |
@@ -370,11 +373,11 @@ This flow is the **completed “Proposed Process”** from the CEO Fulfilment Op
 | Source                      | What this document delivers                                                                                                                                     |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **CEO benchmark (M01–M12)** | Best-practice targets: pay-before-shop, compliance at order entry, structured Shopping, receiving, packing, ship, returns, metrics                              |
-| **ARCH-001 / storefront**   | Payment before order acceptance · idempotent order submit · automated emails · ShipStation-first dispatch (with manual carrier fallback) · FDA gate for US food |
+| **ARCH-001 / storefront**   | Medusa v2 storefront · Payment before order acceptance · idempotent order submit via order.placed event · automated emails · ShipStation-first dispatch (with manual carrier fallback) · FDA gate for US food |
 | **360° architecture**       | Storefront → operations hub → Shopping (online + in-store) → hub QC (Quality Control) → carrier — compliance checks at order entry, pre-label, and return       |
 
 
-**Intentional improvements vs old manual flow:** No payment after Shopping · no ChatGPT copy-paste compliance · no Slack for order status (operations hub is live) · online Shopping first by default — in-store-priority flag routes directly to in-store without online attempt — both streams parallel per 360° Layer 3 · every AI action runs through a gated tool layer with an append-only decision log.
+**Intentional improvements vs old manual flow:** No payment after Shopping · no ChatGPT copy-paste compliance · no Slack for order status (operations hub is live) · **online Shopping first by default** — in-store only on OOS escalation or Kendamil slot rule (not parallel streams by default) · every AI action runs through a gated tool layer with an append-only decision log.
 
 **For Frappe Engineers only:** Record names (Sales Order, Shopping Item, Delivery Note, etc.) are listed in the appendix — not used in day-to-day operations language.
 
@@ -406,7 +409,7 @@ Legal and regulatory decisions run in **one compliance service** at three moment
 
 | System                             | Role in ecommerce terms                                                                                                                                                                                                |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **McGrocer storefront**            | Shop, Cart, checkout, pay — replaces Shopify                                                                                                                                                                           |
+| **McGrocer storefront**            | Medusa v2 — Shop, Cart, checkout, pay. Postgres (order events) + Fastify API + Next.js frontend. Replaces Shopify.                                                                                                                                                                           |
 | **Operations hub**                 | Single source of truth for orders, stock, Shopping, packing, tracking, returns (operations hub backend)                                                                                                                |
 | **Compliance service**             | Three automated compliance checks above                                                                                                                                                                                |
 | **Gated tool layer**               | The audited boundary every AI agent acts through — retailer logins, carrier APIs, payments. Agents never call a retailer or carrier directly; every call is logged and reversible                                      |
@@ -455,7 +458,7 @@ Runs immediately after payment, before the order is **Confirmed**:
 3. DG / alcohol / OTC medication / food / electrical rules satisfied?
 4. Payment confirmed and valid?
 5. Fraud or duplicate-order check clear?
-  → Fraud score threshold: if the Order Review Agent (AI-001) returns a confidence score below 0.70, the order is automatically placed on HOLD and the Operations manager is alerted via Slack with a direct ERPNext link. Score ≥ 0.70 passes automatically. This threshold (0.70) matches the SOW ARCH-001 agent pipeline confidence gate and must be configured in the Order Review Agent before go-live. [CONFIG — confirm with Head of Engineering before build]
+  → Fraud score threshold: if the Order Review Agent (AI-001) returns a confidence score below 0.70, the order is automatically placed on HOLD and the Operations manager is alerted via Slack with a direct ERPNext link. Score ≥ 0.70 passes automatically. This threshold (0.70) matches the SOW ARCH-001 agent pipeline confidence gate and is confirmed as the production value. The Frappe Engineer configures this in the Order Review Agent settings before go-live. [CONFIRMED — 0.70 per SOW ARCH-001 §5. Owner: Frappe Engineer — Deadline: Sprint 1]
 6. Sanctions screening clear?
 7. Does the shipping charge cover the estimated carrier cost?
 
@@ -565,55 +568,80 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 | Weekly cycle count                          | Weekly                                              | M10                                               |
 | UPS carrier claim window                    | 60 days from shipment (alert when < 14 days remain) | M09                                               |
 | Repeat-incident pattern flag                | > 2 incidents/month (same SKU, route, or carrier)   | M09 / M12                                         |
-| Write-off threshold                         | £[to confirm]                                       | M08 return triage — auto write-off vs quarantine  |
-| Auto-refund limit                           | £[to confirm]                                       | M08 — auto-issue vs CS confirmation required      |
+| Write-off threshold                         | £30                                                 | M08 return triage — auto write-off vs quarantine  |
+| Auto-refund limit                           | £150                                                | M08 — auto-issue vs CS confirmation required      |
 
 
 ---
 
 ## Finance Engine — cross-layer accounting
 
+**Architecture update (V3.0):** The 360-Master v2 Finance Engine described ERPNext sub-ledger → external statutory ledger → bank. This is updated: ERPNext is the sole accounting system. There is no external accounting layer. ERPNext handles sub-ledger, statutory accounts, VAT filing (MTD), and bank reconciliation directly. All 360-Master v2 Finance Engine references to a separate statutory system should be read as ERPNext.
+
 **New in v2.9 — established as a first-class cross-layer system per 360° Master v2.**
 
-The Finance Engine is not a separate application. It is the ERPNext accounting layer, correctly wired to fire at the right trigger points in the operations flow. Every module that moves goods or money must leave a posting document in ERPNext. ERPNext is the sub-ledger. Xero is the statutory ledger, bank reconciliation, and MTD VAT filing.
+The Finance Engine is not a separate application. It is the ERPNext accounting layer, correctly wired to fire at the right trigger points in the operations flow. Every module that moves goods or money must leave a posting document in ERPNext. ERPNext is both the sub-ledger and the statutory accounting system. All VAT filing, bank reconciliation, and P&L reporting runs from ERPNext directly.
 
-### Money flow — one posting authority per money fact
+### Money flow — ERPNext as single ledger
 
-| Source | ERPNext document | → Xero |
-|---|---|---|
-| Customer pays (Stripe/PayPal) | Sales Invoice — revenue + output VAT | Statutory GL |
-| Retailer purchase (AI Shopper + in-store) | Purchase Invoice — COGS + input VAT | Bank reconciliation |
-| Carrier cost (ShipStation/DHL/World Options) | Purchase Invoice — fulfilment cost | MTD VAT filing |
-| Refund issued | Credit Note — reverses revenue | Reconciled |
-| Stock write-off (expired, seized, damaged) | Stock Write-off entry — hits P&L | |
-| Carrier claim recovery | Journal Entry — other income | |
-| Payment received | Payment Entry — cash side | |
+| Source | ERPNext document |
+|---|---|
+| Customer pays at Medusa checkout (Stripe/PayPal via Medusa Payment module) | Sales Invoice — revenue + output VAT; Payment Entry — cash side (amounts from synced order) |
+| Retailer purchase (AI Shopper + in-store) | Purchase Invoice — COGS + input VAT |
+| Carrier cost (ShipStation/DHL/World Options) | Purchase Invoice — fulfilment cost |
+| Refund issued | Credit Note — reverses revenue |
+| Stock write-off (expired, seized, damaged) | Stock Write-off entry — hits P&L |
+| Carrier claim recovery | Journal Entry — other income |
+| Payment received (from Medusa order sync) | Payment Entry — allocated against Sales Invoice |
 
 **Per-order contribution margin** = Revenue (Sales Invoice) − COGS (Purchase Invoices, allocated) − Carrier cost (Purchase Invoice). This is a real, queryable number from the ledger once all three document types are wired.
 
-### Three systems of record — conflict precedence
+### Two systems of record — Medusa vs ERPNext
 
-The platform has three systems that hold financial facts about the same events. When they disagree, this is the precedence order for the human reconciler:
+McGrocer uses two systems the same way Shopify + ERPNext work today: **Medusa holds the storefront order; ERPNext holds the full ledger.** They share minimal data — not a mirror of every financial event.
+
+| Medusa (storefront — minimal) | ERPNext (operations hub + ledger — full) |
+|---|---|
+| Order, cart, customer, payment status | Sales Order, Sales Invoice, Payment Entry, Credit Note |
+| Checkout line prices, shipping charged, tax lines shown to customer | Purchase Invoice, COGS, carrier cost, write-offs, Journal Entries |
+| Product catalog for display (`manage_inventory = false`) | Stock, bins, FIFO, Shopping Items, Delivery Notes, Returns |
+| Customer notification triggers | Returns triage, claims, finance dashboard, exception queue |
+
+**Sync direction:** **Medusa → ERPNext only** on `order.placed` (and refund events when built). ERPNext **never** pushes Purchase Invoices, carrier costs, Journal Entries, write-offs, or OPEX postings to Medusa.
+
+**Conflict precedence** (when values disagree during reconciliation):
 
 | Decision type | Authoritative source | Reason |
 |---|---|---|
-| What the customer paid | ERPNext Sales Invoice | Posted at M01 from payment confirmation |
-| What we paid for goods | ERPNext Purchase Invoice | Posted at M03 from receipt match |
-| What the carrier charged | ERPNext Purchase Invoice | Posted at M06 from ShipStation or manual |
-| Statutory accounts and bank | Xero | Statutory ledger + bank feed reconciliation |
-| Order reference and event log | Postgres (storefront) | Append-only order event log |
+| Revenue, COGS, cash, VAT, write-offs, carrier cost, OPEX | ERPNext | Statutory ledger and operational truth |
+| Storefront order state, payment capture status, customer-facing prices at checkout | Medusa / Postgres | Storefront system of record |
 
-**Single cash-posting authority:** ERPNext Payment Entries are the authoritative cash posting. The PSP (Stripe/PayPal) → Xero connector must NOT also post the same receipt. One authority only — ERPNext posts first, Xero syncs from ERPNext. If both post, every payment double-books.
-[CONFIG — Finance Lead must confirm the cash-posting authority and disable the PSP → Xero direct connector before go-live. Owner: Finance Lead — Deadline: before go-live]
+**Payment collection vs ledger posting:** Stripe and PayPal integrate with **Medusa only** — they are Medusa payment providers, not direct ERPNext integrations. The customer pays on the Medusa checkout; Medusa captures payment and stores the breakdown on the order (line totals, shipping, applicable tax lines, payment method, payment reference, total paid). On `order.placed`, the ERPNext subscriber creates the Sales Order, Sales Invoice, and Payment Entry from that synced order payload — the same pattern as Shopify → ERPNext order sync, not a separate PSP webhook into ERPNext.
 
-### Finance Engine — Phase 1 vs Phase 2
+**Single ledger authority:** ERPNext is the sole accounting system. All revenue, VAT, and customer Payment Entries are posted in ERPNext from the Medusa order sync. No parallel PSP→external ledger connector (e.g. Stripe→Xero) is active or permitted. Stripe/PayPal settlement batches are reconciled in ERPNext against the Payment Entries already posted from order sync.
 
-| | Phase 1 (wired, lean) | Phase 2 (agentic) |
+[CONFIRMED — ERPNext is the sole accounting system. Stripe/PayPal stay with Medusa. Payment Entry amounts come from the Medusa order payload (total paid, shipping, tax lines) via the order.placed subscriber — not from direct PSP webhooks to ERPNext. Owner: Frappe Engineer — verify order.placed subscriber creates Sales Order + Sales Invoice + Payment Entry before B1 goes live]
+
+### Finance automation model — agent-first with exception queue
+
+**Build sequence note:** “Phase 1” in the implementation plan means *ERPNext finance hooks wired before Medusa cutover* — not manual finance review on every posting. The default path is **fully automated**; humans intervene only when an agent fails or a tolerance is breached.
+
+| Path | Default (automated) | Human only when |
 |---|---|---|
-| Receipt ingestion | Packaged tool (Hubdoc or Dext) on a finance inbox — retailer emailed receipts captured and matched manually by Finance | Email Monitor extended to finance inbox — each receipt auto-creates a Purchase Invoice and runs a three-way match |
-| Three-way match | Manual Finance reconciliation (agent cost · receipt · bank charge) | Automated — variance >2% routes to Finance exception queue |
-| COGS allocation | Manual allocation by Finance for grouped checkouts | Automated COGS allocation engine: distributes grouped retailer checkout cost across each Shopping Item by value |
-| Finance dashboard | ERPNext reports: P&L, margin/order, AR/AP, VAT liability | Live dashboard in operations hub; daily digest includes GMV, margin, cash |
+| Customer payment → revenue | Medusa `order.placed` → Sales Order + Sales Invoice + Payment Entry (B1) | Compliance hold · fraud HOLD · sync failure |
+| AI Shopper purchase → COGS | BC4 writes price from **checkout success response** → PR on receive → PI auto-post from `actual_purchase_price` (B4). **No email.** | BC6 zero price · agent checkout failure · variance >2% |
+| In-store purchase → COGS | BC3 shopper enters price + receipt photo → same PR/PI path | Price missing · receipt missing |
+| Carrier label → fulfilment cost | ShipStation rate or manual cost → carrier Purchase Invoice (B9) | ShipStation API failure · manual channel |
+| Refund / write-off | Credit Note + refund via Medusa Payment (B11) | Above auto-refund limit (£150) · customs seizure |
+| Grouped checkout COGS split | B-NEW-01 allocation engine (by item value) | Engine not live · allocation dispute |
+| Three-way match | `actual_purchase_price` vs PR grand_total vs bank — auto-pass if ≤2% variance | Variance >2% → **Finance exception queue** |
+| **Non-order OPEX** (rent, payroll, utilities, insurance) | **Email Monitor** drafts PI/JE from finance inbox (B-NEW-02); **Finance posts manually** anything the email agent missed | Human gap-fill always available |
+
+**Email Monitor (B-NEW-02):** Used for **non-order OPEX only** — rent, utilities, payroll-related bills, SaaS invoices arriving in the finance inbox. Agent drafts ERPNext documents; Finance reviews and posts. Anything the email agent does not capture, Finance posts manually. **Not used for order COGS** — online purchase price comes from the AI Shopper at checkout (BC4), not from retailer confirmation emails. See [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md).
+
+**Finance dashboard:** ERPNext reports (P&L, margin/order, AR/AP, VAT liability) plus 3 metrics in the M12 daily digest (B16/B17) once posting hooks are live.
+
+See **[M13 — Finance & ledger](#m13--finance--ledger)** for the full posting map, exception queue, bank reconciliation, and OPEX SOP.
 
 ---
 
@@ -629,9 +657,11 @@ The customer pays at checkout. **Immediately after payment**, an automated **com
 
 ### What starts this module
 
-Customer completes checkout on the storefront — **payment captured before the order is accepted** (same standard as Shopify: pay first, then fulfill).
+Customer completes checkout on the storefront — **payment captured before the order is accepted** (Medusa v2 storefront — Stripe or PayPal via Medusa Payment module. `manage_inventory = false` on all Medusa product variants — availability is determined by McGrocer ops, not stock count.)
 
-### Storefront checkout — what the customer confirms (mcgrocer.com Cart / checkout)
+**Storefront layer (V3.0):** Medusa v2. The customer browses the Medusa Next.js storefront, adds to cart, and pays via the Medusa Payment module (Stripe or PayPal). On payment capture, Medusa emits the `order.placed` event. A custom ERPNext subscriber receives this event and calls the Frappe REST API to create the Sales Order. The Medusa order ID is the idempotency key. All product variants in Medusa have `manage_inventory = false` — stock availability is determined by the ops flow (M01→M03), not by Medusa inventory counts.
+
+### Storefront checkout — what the customer confirms
 
 These messages appear on the Cart and checkout pages today. McGrocer 2.0 **automates enforcement** of the same rules in the compliance service and operations hub (not copy-paste in ChatGPT).
 
@@ -657,8 +687,8 @@ Full legal text: Shipping Policy and Terms and Conditions (linked from checkout)
 
 | #   | Step                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Owner      | System                                      | Data captured                                                         |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------- | --------------------------------------------------------------------- |
-| 1   | Customer completes **checkout**. **Payment is captured** before the order is accepted into the operations hub. Nothing is ever sourced before payment clears.                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `[AUTO]`   | Storefront                                  | Payment captured (amount, method, payment reference)                  |
-| 2   | Order payload sent to operations hub: order lines, quantities, shipping address, payment confirmation. A unique **idempotency key** (a one-time ID attached to the order) means that if the message is sent twice, only one order is ever created — no duplicates on retry.                                                                                                                                                                                                                                                                                                                                    | `[AUTO]`   | Storefront → operations hub                 | Order payload + idempotency key received                              |
+| 1   | Customer completes **checkout**. **Payment is captured** before the order is accepted into the operations hub. Nothing is ever sourced before payment clears. (Medusa v2 storefront — Stripe or PayPal via Medusa Payment module. `manage_inventory = false` on all Medusa product variants — availability is determined by McGrocer ops, not stock count.)                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `[AUTO]`   | Storefront                                  | Payment captured (amount, method, payment reference)                  |
+| 2   | Order payload sent to operations hub: order lines, quantities, shipping address, payment confirmation. A unique **idempotency key** (a one-time ID attached to the order) means that if the message is sent twice, only one order is ever created — no duplicates on retry. The Medusa order.placed event carries the Medusa order ID as the idempotency key seed. The ERPNext subscriber uses this as the deduplication key when creating the Sales Order.                                                                                                                                                                                                                                                                                                                                    | `[AUTO]`   | Storefront → operations hub                 | Order payload + idempotency key received                              |
 | 3   | **Compliance check (order entry)** runs: legal to ship to destination? Prohibited categories? DG, alcohol, OTC, food, electrical rules? Payment confirmed? Fraud/duplicate? Sanctions? Shipping charge covers estimated carrier cost? See the [Checks Register](#checks-register) for the full list.                                                                                                                                                                                                                                                                                                           | `[COMPLY]` | Compliance service                          | Compliance result: pass / fail / hold + reason code                   |
 | 4   | **Fail** → Customer emailed the specific reason (e.g. "we cannot ship this item to your country"). Order rejected. No order record is created.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `[AUTO]`   | Compliance service → customer notifications | Rejection logged (reason code); no order created                      |
 | 5   | **Hold** → Edge case the system cannot decide alone. **Operations manager** or **customer support** reviews within the **2-hour** hold window (see [SLAs & timing](#slas--timing-reference)).                                                                                                                                                                                                                                                                                                                                                                                                                  | `[HUMAN]`  | Operations hub                              | Order status: **On hold** + hold reason                               |
@@ -671,22 +701,20 @@ Full legal text: Shipping Policy and Terms and Conditions (linked from checkout)
 | 11  | **All lines in stock** → reserve the stock. Status: **Processing** (Shopping is skipped). The Tote is assigned at the first receiving scan in M03.                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`   | Operations hub                              | Stock reserved; status **Processing**                                 |
 | 12  | **Partial stock** → reserve the available quantity; create one **Shopping Item** for each shortfall quantity. Status: **Shopping**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `[AUTO]`   | Operations hub                              | Shopping Items created (shortfall only); status **Shopping**          |
 | 13  | **No stock** → create a Shopping Item for every order line. Status: **Shopping**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `[AUTO]`   | Operations hub                              | Shopping Items created (all lines); status **Shopping**               |
-| 14  | Every Shopping Item is assigned a routing flag: online (default) or in-store-priority. Online items are queued for the AI Shopper. In-store-priority items (e.g. Kendamil when online slots are unavailable, or items flagged by Ops) are routed directly to the Shopping List app. Both streams can run in parallel for the same order. The routing flag can be changed manually via the Shopping List app bulk action (Change Shopping Source).                                                                                                                                                              | `[AUTO]`   | Operations hub                              | Shopping Items queued: buy online                                     |
-| 14b | **DHL priority flag:** if the customer selected a DHL-specific service at checkout, the operations hub sets the order priority tier to Express automatically — the same tier used for perishable and short-shelf-life items. No separate priority field is needed; DHL-service orders enter the Express tier at order creation. [OPS TO CONFIRM — does a DHL order always mean express service was selected at checkout, or is there a separate DHL flag in Shopify that must be mapped? Operations Lead to confirm before Sprint 1. If a separate flag exists, the Frappe Engineer adds a `dhl_service_flag` boolean to the Sales Order DocType and maps it to the Express priority tier.] | `[AUTO]` | Operations hub | Priority tier set |
-| 14c | **Elite Price notification [DECISION PENDING]:** Elite Price is a pricing scenario in current ops where a premium is charged above the standard price for hard-to-find items. It is not yet mapped to a V2 notification or workflow. Three options: (a) **Fee request model:** treated the same as the extra shipping fee — ERPNext triggers a fee request email and the order is held until the customer pays. Peter builds the ERPNext trigger. Chisom builds the payment link in the account portal. (b) **Notification only:** customer is informed of the premium price and must approve before the item is shopped. Uses the existing substitute approval email template. (c) **Retired:** Elite Price is not used in V2. [OPS TO CONFIRM — which option? Once confirmed, Peter and Chisom will implement. Owner: Ops Lead + Peter + Chisom — Deadline: before M2 W1] | `[HUMAN]` pending decision | Operations hub | Pending decision |
+| 14  | Every Shopping Item is created with routing flag **online** (default). All items queue for the AI Shopper first. In-store is escalation only: OOS after online exhaustion, Kendamil slot rule, Ops exception list SKU, or manual Change Shopping Source. | `[AUTO]`   | Operations hub                              | Shopping Items queued online; escalations logged                                    |
+| 14b | **DHL priority flag:** if the customer selected a DHL-specific service at checkout, the operations hub sets the order priority tier to Express automatically — the same tier used for perishable and short-shelf-life items. DHL-service maps to Express priority tier in Medusa order metadata. Ops Lead confirms before Sprint 1. If a separate flag exists beyond checkout service selection, the Frappe Engineer adds a `dhl_service_flag` boolean to the Sales Order DocType and maps it to the Express priority tier. | `[AUTO]` | Operations hub | Priority tier set |
+| 14c | **Elite Price notification — Option (b) confirmed:** when an item carries an Elite Price premium above its standard catalog price, the customer is notified and must approve the premium before the AI Shopper purchases. The notification uses the existing substitute approval email template (product image + standard price + Elite Price + approval button). The order is held until the customer approves. If no response within 48 hours, the item is treated as OOS and the standard OOS escalation chain applies. Best practice basis: notification-only is the lowest-friction option that preserves customer consent without requiring a new payment portal page (option a) or losing the feature entirely (option c). [CONFIRMED — Owner: Frappe Engineer (ERPNext trigger) — Deadline: before M2 W1] | `[HUMAN]` customer approval | Operations hub | Elite Price approved or OOS escalated |
 | 15  | **5 Shopping-Readiness Checks** — all must pass before any item is bought. The exact 5 are defined once in the [Checks Register](#checks-register): (1) DG (Dangerous Goods) £87 fee paid if required (waived for EU / Norway / Switzerland), (2) extra shipping fee paid if the order's weight exceeded the checkout estimate, (3) alcohol age + destination import confirmation on file, (4) electrical UK-specification acknowledgement on file, (5) licence/permit confirmation on file if the item requires one. Any fail → customer emailed the specific requirement → order **On hold** until resolved. | `[AUTO]`   | Operations hub → customer notifications     | Each check pass/fail recorded; Shopping released only when all 5 pass |
 
 
-> **Migration note (SOW M1–M3 W11):** During the migration period,
-> sync_sales_order() from Shopify and the new storefront endpoint
-> run in parallel. Both paths must generate the idempotency key
-> using the same algorithm (Shopify order ID as the key seed) so
+> **Migration note (SOW M1–M3 W11):** During cutover, Shopify webhooks and
+> the new Medusa order.placed subscriber may run in parallel for a defined
+> window. Both must use the Medusa/Shopify order ID as the idempotency key seed so
 > that a retry from either source returns the original result rather
-> than creating a duplicate order. The Frappe Engineer must confirm
-> that both the Shopify webhook handler and the new storefront API
-> use the same key generation logic before the parallel period
-> begins. sync_sales_order() is retired at M3 W11 cutover per
-> SOW-ARCH-001 v1.4.
+> than creating a duplicate Sales Order. The Frappe Engineer must confirm
+> that both the legacy Shopify webhook handler and the new Medusa subscriber use the same key
+> generation logic before the parallel period
+> begins.
 
 > **Retired in V2: 48-hour manual review window**
 > The old 48-hour order review queue is retired on Phase 1
@@ -759,7 +787,7 @@ Every item not held in stock is bought from the right retailer at the right pric
 
 ### What this module does
 
-When items are not in **available stock**, we **shop** for them at UK retailers (like Instacart shopping). The AI Shopper checks out online — one retailer checkout per store for many customer orders. Items flagged as in-store-priority go directly to the In-store Shopper via the Shopping List app without waiting for online to fail. Items that are OOS online also escalate to in-store. Both streams can run in parallel for the same order.
+When items are not in **available stock**, we **shop** for them at UK retailers (like Instacart shopping). The AI Shopper checks out online — one retailer checkout per store for many customer orders. **All items start online.** In-store Shopping is the **escalation path only** — reached when the AI Shopper exhausts all online retailers (OOS), when the Kendamil slot rule triggers, or when Ops manually overrides source.
 
 ### What starts this module
 
@@ -790,12 +818,12 @@ Every item that needs to be bought externally gets its own record (a **Shopping 
 | 1   | All **5 Shopping-Readiness Checks** are confirmed passed. Every Shopping Item on this order is cleared for purchasing.                                                                                                                                                                                                                                                                                                                                                                | `[AUTO]`                           | Operations hub                          | Shopping Items cleared to buy                                                       |
 | 2   | **Smart grouping:** the operations hub looks at ALL open orders across all customers that need items bought, and groups Shopping Items by retailer — all Tesco items across all orders into one Tesco retailer checkout, all Sainsbury's items into one Sainsbury's checkout, and so on. One checkout per retailer, not one per order.                                                                                                                                                | `[AUTO]`                           | Operations hub                          | One retailer checkout created per retailer                                          |
 | 3   | **Oldest orders first:** within each retailer group, the oldest orders (placed earliest) are bought first, so no customer waits longer just because they ordered later.                                                                                                                                                                                                                                                                                                               | `[AUTO]`                           | Operations hub                          | Purchase order within group set (oldest first)                                      |
-| 4   | Each Shopping Item is assigned to the most suitable retailer based on availability, price, and purchase limits. Priority order: main supermarkets first (Tesco, Sainsbury's, Waitrose, Boots) → specialist retailers second → Amazon only as a last resort.                                                                                                                                                                                                                           | `[AUTO]`                           | Operations hub                          | Retailer assigned to each Shopping Item                                             |
+| 4   | Each Shopping Item is assigned to the most suitable retailer based on availability, price, and purchase limits. Priority order: main supermarkets first (Tesco, Sainsbury's, Waitrose, Boots) → specialist retailers second → Amazon only as a last resort. **Phase 2 optimisation (F1 from ARCH-AUTO-001):** Demand-forecast and batch pre-buy of top SKUs into Stores-M so more orders hit PATH 1 and skip Layer 3 entirely. This reduces AI Shopper runs by up to 80–90% at scale. Tracked as a Phase 2 improvement, not a Sprint 1 task.                                                                                                                                                                                                                           | `[AUTO]`                           | Operations hub                          | Retailer assigned to each Shopping Item                                             |
 | 5   | **Kendamil baby formula limits:** because Kendamil has strict retailer purchase limits, the system automatically caps quantities — Sainsbury's and Boots: max 10 units per session; Tesco and Waitrose: max 6 units per session; Superdrug: varies by store. Anything above the cap is automatically scheduled for the next retailer checkout.                                                                                                                                        | `[AUTO]`                           | Operations hub                          | Quantities capped per retailer rule; overflow re-scheduled                          |
 | 6   | The AI Shopper picks up the oldest retailer checkout and begins purchasing, acting through the gated tool layer (never the retailer site directly).                                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Checkout session started                                                            |
 | 7   | The AI Shopper logs into the retailer's website using securely stored credentials held in the gated tool layer.                                                                                                                                                                                                                                                                                                                                                                       | `[AGENT]`                          | AI Shopper → gated tool layer           | Logged in                                                                           |
 | 8   | The AI Shopper adds all required items (combined quantities for all orders needing them) to the Cart.                                                                                                                                                                                                                                                                                                                                                                                 | `[AGENT]`                          | AI Shopper                              | Retailer Cart built                                                                 |
-| 9   | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. The default spend cap is £[OPS TO CONFIRM — suggested £500] per retailer checkout session. This value must be set in the operations hub retailer settings before go-live and confirmed by the Operations Lead. [CONFIG — Owner: Operations Lead — Deadline: before M3 W9] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
+| 9   | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. The spend cap is **£500** per retailer checkout session. **Deputy approver (PROPOSED):** Ops Lead if operations manager unavailable. **Timeout (PROPOSED):** if no approval within **4 hours**, escalate to Mike (CEO); if still no response, checkout is **denied** (not auto-approved). This value is set in the operations hub retailer settings. [CONFIRMED — spend cap £500 PROPOSED pending Mike sign-off — Owner: Frappe Engineer — Sprint 1, Week 1] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
 | 10  | The AI Shopper checks out: the McGrocer delivery address is pre-saved, payment is pre-saved, and the earliest available delivery slot to the warehouse is selected.                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Order placed with retailer                                                          |
 | 11  | The AI Shopper records, against each Shopping Item, the retailer's order confirmation number, the expected delivery date, and the actual purchase cost. The Shopping Items are marked **Purchased**. Every input and response is written to the decision log.                                                                                                                                                                                                                         | `[AGENT]`                          | AI Shopper → operations hub             | Retailer order ref + expected delivery + cost; items **Purchased**; decision logged |
 | 12  | Once all Shopping Items for an order are purchased, the order stays at status **Shopping** (everything is ordered and now in transit to the warehouse). Operations and warehouse are notified automatically.                                                                                                                                                                                                                                                                          | `[AUTO]`                           | Operations hub → customer notifications | Status confirmed **Shopping**; Ops + warehouse notified                             |
@@ -844,17 +872,17 @@ OOS (Out of Stock) detected AND a substitute exists
     All decisions logged in the operations hub against the Shopping Item (decision log)
 ```
 
-> **Human-in-the-loop rule:** a substitute is **never bought without explicit customer approval**. If the substitute price is more than [OPS TO CONFIRM — suggested 15%] above the original item price, customer approval is always required before the AI Shopper purchases. Below this threshold, the substitute offer is still sent to the customer but may be configured to auto-approve after the response window if the customer does not respond. The exact percentage and auto-approve behaviour must be confirmed by the Operations Lead before build. [CONFIG — Owner: Operations Lead — Deadline: before M2 W5]
+> **Human-in-the-loop rule:** a substitute is **never bought without explicit customer approval**. If the substitute price is more than **15%** above the original item price, customer approval is always required before the AI Shopper purchases. Below 15%, the substitute offer is sent to the customer and **auto-approved after 48 hours of no reply** — the AI Shopper proceeds with the substitute automatically. Best practice basis: 15% is the standard McGrocer tolerance for price variance; 48h auto-approve below threshold prevents order stalls on low-risk substitutes. [CONFIRMED — Owner: Frappe Engineer — configure substitute threshold and auto-approve timeout in operations hub before Sprint 1]
 
-**Finance note:** when the customer approves a substitute that costs more than the original item, the price delta is a revenue difference. The Sales Invoice raised at M01 used the original item price. If the approved substitute price is higher, a **Sales Invoice amendment or supplementary invoice line** must be issued to the customer for the delta before the substitute is purchased. If the substitute price is lower, a credit adjustment applies. In both cases, the purchase cost of the substitute is captured as a separate Purchase Invoice line at M03.
-[BUILD TASK — Owner: Frappe Engineer — add Sales Invoice amendment logic for substitute price deltas. Owner: Finance Lead — confirm the revenue treatment. Deadline: before M2 W5]
+**Finance note:** when the customer approves a substitute that costs more than the original item, the price delta is a revenue difference. The Sales Invoice raised at M01 used the original item price. If the approved substitute price is higher, a **Sales Invoice amendment** must be issued to the customer for the delta before the substitute is purchased. The original Sales Invoice is amended to add a supplementary line for the price difference. This is the standard ERPNext treatment for order amendments. If the substitute price is lower, a credit adjustment applies. In both cases, the purchase cost of the substitute is captured as a separate Purchase Invoice line at M03.
+[BUILD TASK — Owner: Frappe Engineer — add Sales Invoice amendment logic for substitute price deltas. Revenue treatment confirmed: Sales Invoice amendment with supplementary delta line. Deadline: before M2 W5]
 
 ### Shopping List app — the mobile shopping list
 
 **URL:** `https://erpnext.mcgrocer.com/shopping-list`
 **Who uses it:** In-store Shoppers (requires the `Shopper` role in the operations hub)
 **Device:** Mobile-optimised — designed to be used on a phone while physically in a retail store
-**When it activates:** For two categories of item: (1) items whose routing flag is in-store-priority — these appear immediately without waiting for online to fail; (2) items that were attempted online and are OOS at every online retailer — these are escalated after online exhaustion. The flag can be set by Ops or by the system based on item-level rules (e.g. Kendamil when online delivery slots exceed the warehouse deadline).
+**When it activates:** Only after online exhaustion or a documented auto-flip rule: (1) AI Shopper could not buy the item at any online retailer (OOS escalation); (2) Kendamil slot rule — earliest online delivery to warehouse exceeds the configured threshold (default 2 business days); (3) explicit Ops override via Change Shopping Source in the Shopping List app.
 
 When a Shopping Item is switched to "buy in store", it appears on this page for the assigned In-store Shopper. This is their complete workflow tool at the store.
 
@@ -886,7 +914,7 @@ Each item appears as a card with:
 #### What the In-store Shopper does at the store
 
 1. Opens the Shopping List app on their phone
-2. Sees items in two categories: **(1) in-store-priority items** — these appear immediately because their routing flag was set to in-store-priority before any online attempt was made (e.g. Kendamil when online delivery slots exceed the order deadline); **(2) OOS-escalated items** — items the AI Shopper could not buy at any online retailer, switched to in-store after online exhaustion. Both types are worked the same way in the app.
+2. Sees items that were escalated to in-store: **(1) OOS-escalated items** — the AI Shopper could not buy at any online retailer; **(2) Kendamil slot-escalated items** — online delivery slot to warehouse exceeds the deadline; **(3) Ops override items** — source changed manually. All are worked the same way in the app.
 3. For each item: searches up to 3 physical stores
 4. **Item found**: enters the quantity bought in the qty field and taps **Confirm Purchase**. The operations hub then records the shopped quantity, moves the Shopping Item from Pending → Shopped (or Partially Shopped if partial), and logs the purchase cost against the item.
 5. **Item not found at any store**: taps **Mark as N/A**, leaves qty at 0, and adds a comment explaining what was tried (e.g. "Tried Tesco, Boots, Superdrug — OOS everywhere"). The Shopping Item is then **Cancelled**.
@@ -917,11 +945,11 @@ Every Shopping Item has a `shop_from` field (values: `online` | `in_store_priori
 
 | Rule | Trigger | Result |
 |------|---------|--------|
-| Default | All new Shopping Items | `shop_from = online` |
-| Ops in-store list | Item's ERPNext Item master has `default_shop_from = in_store_priority` (set by Operations Lead) | `shop_from = in_store_priority` at Shopping Item creation |
-| Kendamil slot rule | Item is Kendamil AND earliest available online delivery slot to warehouse is more than 2 business days away | `shop_from` auto-flipped to `in_store_priority` by the operations hub at Shopping Item creation |
-| Manual override | In-store Shopper or Ops uses "Change Shopping Source" bulk action in Shopping List app | `shop_from` updated via `update_shopping_source()` — logged in decision log |
-| OOS escalation | AI Shopper exhausts all online retailers | `shop_from` auto-flipped to `in_store_priority` by the operations hub — Shopping Item appears in Shopping List app |
+| **Default** | All new Shopping Items | `shop_from = online` — AI Shopper attempts online first |
+| Kendamil slot rule | Item is Kendamil AND earliest available online delivery slot to warehouse is more than 2 business days away | `shop_from` auto-flipped to `in_store_priority` — appears in Shopping List app (online not attempted for that item) |
+| OOS escalation | AI Shopper exhausts all online retailers for the item | `shop_from` auto-flipped to `in_store_priority` — Shopping Item appears in Shopping List app |
+| Manual override | In-store Shopper or Ops uses "Change Shopping Source" bulk action | `shop_from` updated via `update_shopping_source()` — logged in decision log |
+| Ops exception list | SKU on Operations Lead exception list (explicit only — not Item master default) | `shop_from = in_store_priority` at Shopping Item creation — online skipped for that SKU only |
 
 > **Both-stream cost reconciliation:**
 > If the shop_from flag is set to in-store-priority but the AI Shopper also attempts the same item online before the flag is processed (a race condition during the transition window), two purchases can occur for the same Shopping Item. Agent 3 reconciles the physical quantity at receiving (QC), but two costs would be recorded. ERPNext must enforce: once a Shopping Item's shop_from flag is set, the other stream's checkout session for that item is cancelled via the gated tool layer before it completes payment. The Frappe Engineer must implement a Shopping Item status check at the start of the AI Shopper checkout step — if the item is already marked Purchased (in-store), the online session is abandoned.
@@ -946,23 +974,50 @@ Every Shopping Item has a `shop_from` field (values: `online` | `in_store_priori
 
 When an in-store Shopper purchases items, the following must happen to close the COGS loop:
 
-**Phase 1 (manual, Finance-confirmed):**
-1. The Shopper enters the purchase cost per item in the Shopping List app at the point of purchase.
+1. The Shopper enters the purchase cost per item in the Shopping List app at the point of purchase (BC3 → `actual_purchase_price`).
 2. The Shopper photographs the receipt. The photo is uploaded against the Shopping Item in the operations hub.
-3. The receipt photo and cost entry together create a draft **Purchase Invoice** in ERPNext — with the retailer as supplier, the cost as the line value, and the Shopping Item reference linking it to the customer order.
-4. A **reimbursement liability** is created in ERPNext if the purchase was on a personal card (not the Tide card) — this is a creditor entry showing McGrocer owes the Shopper that amount.
-5. Finance reviews and posts the draft Purchase Invoice within 24 hours. Once posted, COGS and input VAT are booked.
+3. On warehouse receive (M03): Purchase Receipt uses `actual_purchase_price`; Purchase Invoice is **auto-created and auto-submitted** from price + input VAT category template (B4) unless BC6 blocks or variance >2% routes to Finance exception queue (see [M13](#m13--finance--ledger)).
+4. A **reimbursement liability** is created in ERPNext if the purchase was on a personal card (not the Tide card) — Staff Reimbursements - M account (F7 confirmed).
 
-**Phase 2 (automated, F10 from ARCH-AUTO-001):**
-The Email Monitor is extended to a finance inbox. Retailer emailed receipts are automatically parsed, matched to the Shopping Item, and used to auto-create and post the Purchase Invoice without manual Finance review.
+**Retailer delivery on online checkouts:** When the AI Shopper checks out online, retailer delivery to the warehouse is included in the checkout total. BC4 captures per-item prices from the checkout success response; any checkout-level delivery fee is **allocated proportionally across items** in the grouped checkout (assumption A-COGS-04 in [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md)).
 
-[CONFIG — Finance Lead must confirm: (1) the ERPNext supplier record for each in-store retailer, (2) the input VAT rate applicable to each category of goods, (3) the reimbursement account code for personal-card purchases. Owner: Finance Lead — Deadline: before go-live]
+### Actual purchase price capture — critical fix (BC2–BC6)
+
+**Background:** Production audit (June 2026) confirmed that Shopping Item `rate` is set from `Item Supplier.custom_price` (a scraped catalog reference price), not from the actual price paid at checkout. The `confirm_purchases` function records quantity only — `rate` stays at zero. This means Purchase Receipt values are estimates, not real procurement spend. 470 of 2,018 submitted Purchase Receipts (23%) have £0 grand total.
+
+**Fix sequence — must be built before B4:**
+
+| Task | What it does |
+|---|---|
+| BC2 | Add `actual_purchase_price` (Currency) field to Shopping Item DocType |
+
+[BUILD TASK — BC2 — Add `actual_purchase_price` Currency field to Shopping Item DocType. Owner: Frappe Engineer — Deadline: Sprint 1, Week 1]
+
+| BC3 | Shopping List app shows price input field when shopper taps Confirm Purchase. `confirm_purchases` writes entered price to `actual_purchase_price` and to `purchases` child table `rate` |
+
+[BUILD TASK — BC3 — Shopping List app price input field at Confirm Purchase. `confirm_purchases` writes entered price to `actual_purchase_price` AND to `purchases` child table `rate`. Owner: Frappe Engineer — Deadline: Sprint 1, Week 1]
+
+| BC4 | AI Shopper (Sourcing Router) captures each item's price from the **retailer checkout success response** (cart line totals at payment confirmation) and writes it to `actual_purchase_price` on the Shopping Item — **not from email** |
+
+[BUILD TASK — BC4 — AI Shopper captures per-item price from retailer checkout success response at payment confirmation. Writes to Shopping Item `actual_purchase_price` via gated tool layer — no email parsing. Owner: AI Developer — Deadline: Sprint 1, Week 2]
+
+| BC5 | `create_purchase_receipt_from_shopping_items` reads `actual_purchase_price` as the `rate` on each PR line. Falls back to `rate` (catalog) only if `actual_purchase_price` is null |
+
+[BUILD TASK — BC5 — `create_purchase_receipt_from_shopping_items` reads `actual_purchase_price` as the `rate` on each PR line. Falls back to `rate` (catalog price) only if `actual_purchase_price` is null. Owner: Frappe Engineer — Deadline: Sprint 1, Week 2]
+
+| BC6 | Block Purchase Receipt creation if `actual_purchase_price = 0` — require manual price entry or flag Shopping Item for Finance review before receipt can be posted |
+
+[BUILD TASK — BC6 — Block Purchase Receipt creation if `actual_purchase_price = 0`. Flag Shopping Item for Finance review. Ops manager must manually enter price before receipt can post. Owner: Frappe Engineer — Deadline: Sprint 1, Week 2. Must be live before B4.]
+
+**Historical remediation:** 470 existing zero-rate Purchase Receipts require a one-time remediation exercise. Options: (a) cancel and recreate with correct prices from Tide card statements and retailer confirmation emails; (b) post price correction Journal Entries per receipt; (c) accept as zero-cost historical stock and move forward with correct prices from go-live. Finance Lead decides method.
+
+[CONFIRMED — (1) ERPNext supplier records to be created for: Tesco, Sainsbury's, Waitrose, Boots, M&S, Superdrug, Holland & Barrett, Argos, John Lewis, Next, Ocado, ASDA, Costco, Harrods, Lego (15 suppliers already exist in production — verify and add any missing). (2) Input VAT rates: food items = 0% (UK zero-rated); non-food items = 20% standard rate; children's clothing = 0%; adult clothing = 20%; supplements/OTC = 20%. (3) Reimbursement account: "Staff Reimbursements - M" — create as a Current Liability account under Accounts Payable in ERPNext CoA. Owner: Frappe Engineer — Deadline: before B4 goes live]
 
 **ERPNext field:** `shop_from` on the Sourcing Line DocType.
 Values: `online` (default) · `in_store_priority`.
 **Function:** `update_shopping_source()` — see Appendix §J.
-**Who configures the item master default:** Operations Lead sets `default_shop_from` on the ERPNext Item master for any item that should always route in-store.
 **Who configures the Kendamil slot threshold:** Operations Lead sets the slot-deadline threshold (default: 2 business days) in the operations hub system settings before go-live.
+**Who maintains the Ops exception list:** Operations Lead maintains a short explicit SKU list for items that must skip online entirely (if any) — not a standing Item master default.
 [CONFIG — Owner: Operations Lead + Frappe Engineer — Deadline: before M2 W1]
 
 ### DG (Dangerous Goods) handling in Shopping
@@ -970,6 +1025,9 @@ Values: `online` (default) · `in_store_priority`.
 - If the order is flagged as Dangerous Goods: the AI Shopper routes to a DG-capable retailer only
 - The AI Shopper confirms the DG packaging type is available before checking out
 - A standard retailer checkout is blocked for DG items until the operations hub confirms the £87 fee is paid
+
+**Key-person risk (from TRANSFORM-001):** Gurdeep's DG classification knowledge must be encoded as explicit YAML rules in Compliance Engine Tier 1 before go-live. The DG flag automation in V3.0 is only safe once those rules exist. Similarly, vendor selection logic from the scraper-review habit must be encoded as the AI Shopper retailer priority rules (Priority order: Tesco → Sainsbury's → Waitrose → Boots → specialist → Amazon last). Neither can remain tribal knowledge.
+[ACTION — Owner: Compliance team (DG rules) + AI Dev (vendor priority rules) — Deadline: before AI Shopper goes live in Phase 2]
 
 ### M02 Flowchart
 
@@ -1052,7 +1110,7 @@ An order does not need to be 100% received to proceed to packing. If **≥ 90% o
 | Condition                              | Operations hub action                                                                                   |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | < 90% of value received                | Order stays **Shopping**. Tote stays open. System monitors.                                             |
-| ≥ 90% of value received                | Operations hub flags the order as eligible to proceed. Operations manager approves the partial proceed. |
+| ≥ 90% of value received                | If **outstanding line value ≤ £30** (same as write-off threshold): **auto-proceed** to Processing. If outstanding value **> £30**: Operations manager approves partial proceed. If **100%** received: auto-proceed without approval. |
 | Customer has accepted partial shipment | Order can proceed regardless of % received.                                                             |
 | Remaining item confirmed OOS           | Shopping Item cancelled; order proceeds if all others received.                                         |
 
@@ -1066,14 +1124,14 @@ An order does not need to be 100% received to proceed to packing. If **≥ 90% o
 | 2   | Warehouse associate opens the Receiving app in the operations hub.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `[HUMAN]`                                           | Operations hub                          | —                                                                                           |
 | 3   | Scans the product barcode with a scanner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `[HUMAN]`                                           | Operations hub                          | Barcode looked up                                                                           |
 | 4a  | **Barcode found** → system shows item name + all orders needing this item + qty per order + the Tote assigned to each.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `[AUTO]`                                            | Operations hub                          | Item + orders + Totes displayed                                                             |
-| 4b  | **Barcode not found** → system prompts: "Confirm product name + variant. Save new barcode?" → staff confirm → barcode saved → rescan to verify.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `[HUMAN]` then `[AUTO]`                             | Operations hub                          | New barcode saved against the item                                                          |
+| 4b  | **Barcode not found** → system prompts: "Confirm product name + variant. Save new barcode?" → staff confirm → barcode saved → rescan to verify. **Phase 2 optimisation (F2 from ARCH-AUTO-001):** Pre-register expected barcodes from the L0 catalog; parse retailer order confirmations into an ASN (Advance Shipping Notice) so receiving becomes scan-to-confirm rather than scan-and-save. Eliminates unknown-barcode events at scale.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `[HUMAN]` then `[AUTO]`                             | Operations hub                          | New barcode saved against the item                                                          |
 | 4c  | **Duplicate barcode** → system shows the conflict: "This barcode is already linked to [other item]. Stop and investigate." → escalated to the Frappe Engineer if unresolvable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `[GATE]` `[HUMAN]` Frappe Engineer                  | Operations hub                          | Conflict flagged; item blocked                                                              |
 | 5   | **Single-order item**: system shows, e.g., `Heinz Baked Beans 415g → ORDER-041 · 2 units · TOTE-07 [Confirm]`. Tote auto-assigned. Staff place the items in TOTE-07 and confirm.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `[AUTO]` Tote; `[HUMAN]` physical                   | Operations hub                          | Confirmation recorded                                                                       |
 | 6   | **Multi-order item**: system shows all orders needing this item with a Tote pre-assigned to each. Staff count the physical units, enter the qty per order (the total entered cannot exceed the physical qty received), and confirm.                                                                                                                                                                                                                                                                                                                                                                                                                 | `[AUTO]` Totes; `[HUMAN]` qty entry                 | Operations hub                          | Qty per order recorded                                                                      |
-| 7   | When confirmed: the operations hub automatically: (a) records an ERPNext **Purchase Receipt** — a posted stock document that adds the items to McGrocer's warehouse stock and debits the stock account with the COGS value, (b) marks the Shopping Item **Received**, (c) logs the exact arrival time for SLA measurement, and (d) creates a draft **Purchase Invoice** matched to the Purchase Receipt. The Purchase Invoice posts COGS and input VAT to the ledger once Finance confirms the receipt matches the retailer's emailed invoice (Phase 1: manual match within 24h; Phase 2: Email Monitor auto-matches). **Stock costing method: FIFO.** The FIFO costing method is declared here — the first items received at the lowest cost are allocated to orders first. This is the costing basis that values COGS in the ledger. Finance Lead must confirm FIFO as the chosen method before go-live. [CONFIG — Owner: Finance Lead — confirm FIFO as the stock costing method and enable it in ERPNext before Sprint 1] [BUILD TASK — Owner: Frappe Engineer — ensure Purchase Receipt creation triggers a draft Purchase Invoice with the Shopping Item cost field as the line value — Deadline: Sprint 1] | `[AUTO]` | Operations hub → ERPNext ledger | Stock updated; Purchase Receipt posted; draft Purchase Invoice created; item **Received**; arrival timestamp logged |
-| 8   | **Damaged item on arrival**: staff photograph the damaged item, log the damage against the specific order, and physically move the item to the Quarantine zone. Operations is automatically alerted. The operations hub creates a new Shopping Item so the replacement can be ordered and the process restarts for that item.                                                                                                                                                                                                                                                                                                                       | `[HUMAN]` log + physical; `[AUTO]` alert + new item | Operations hub                          | Damage photo + record saved; replacement Shopping Item created                              |
+| 7   | When confirmed: the operations hub automatically: (a) records an ERPNext **Purchase Receipt** — a posted stock document that adds the items to McGrocer's warehouse stock and debits the stock account with the COGS value, (b) marks the Shopping Item **Received**, (c) logs the exact arrival time for SLA measurement, and (d) creates and **auto-submits** a **Purchase Invoice** matched to the Purchase Receipt. Line value = Shopping Item **`actual_purchase_price`** (set at checkout by BC4 for online, BC3 for in-store) + input VAT from item category template. **No email lookup for order COGS** — the AI Shopper writes the price from the retailer checkout success response at purchase time; receiving only posts what is already on the Shopping Item. If BC6 blocks (zero price) or bank variance >2%, the item routes to the Finance exception queue (M13). **Stock costing method: FIFO.** FIFO is confirmed and configured in ERPNext Stock Settings (production audit, June 2026). The Frappe Engineer must verify Item Valuation Method = FIFO before Sprint 1. [BUILD TASK — Owner: Frappe Engineer — Purchase Receipt triggers Purchase Invoice from `actual_purchase_price` — Deadline: Sprint 1] | `[AUTO]` | Operations hub → ERPNext ledger | Stock updated; Purchase Receipt posted; Purchase Invoice posted; item **Received**; arrival timestamp logged |
+| 8   | **Damaged item on arrival**: staff photograph the damaged item, log the damage against the specific order, and physically move the item to the Quarantine zone. Operations is automatically alerted. The operations hub creates a new Shopping Item so the replacement can be ordered and the process restarts for that item. If the retailer accepts a return for credit (high-value path), Finance tracks expected credit via **Retailer Return Record → AR entry** (M08 step 11a) — closes STRESS-OPS M03-3. | `[HUMAN]` log + physical; `[AUTO]` alert + new item | Operations hub | Damage photo + record; replacement Shopping Item; AR if retailer credit |
 | 9   | **Partial receipt**: the Tote stays open. Order stays **Shopping**. System monitors the remaining items.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `[AUTO]`                                            | Operations hub                          | No status change                                                                            |
-| 10  | **≥ 90% of value received OR all non-cancelled Shopping Items received** → the operations hub flags the order as eligible to proceed to **Processing**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                            | Operations hub                          | Eligibility flag set (manager approves at the 90% threshold; auto-proceeds if all received) |
+| 10  | **≥ 90% of value received OR all non-cancelled Shopping Items received** → the operations hub flags the order as eligible to proceed to **Processing**. **Auto-proceed without manager approval** when outstanding unreceived value is **≤ £30** (PROPOSED — same threshold as write-off). Above £30 outstanding value: Operations manager must approve. **100% received:** auto-proceed. | `[AUTO]`; `[HUMAN]` if outstanding >£30 | Operations hub | Eligibility flag; auto or manager-approved proceed |
 | 11  | Order status changes to **Processing**. The warehouse team is automatically notified.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[AUTO]`                                            | Operations hub → customer notifications | Status **Processing**; warehouse notified                                                   |
 | 12  | Before the order appears in the packing queue, the operations hub automatically runs the **3 Packing Readiness Checks** (defined in the [Checks Register](#checks-register)): **(1) DG orders only:** is the £87 DG handling fee confirmed paid, and are DG packaging materials ready? **(2) All orders:** has any item passed its expiry date? If yes, the expired item is blocked and Operations is alerted. **(3) DG orders:** is the DG documentation (safety data sheet + shipper declaration) prepared? If any check fails, the order is shown with a specific blocking reason and will not appear in the packing queue until it is resolved. | `[AUTO]`                                            | Operations hub                          | 3 checks run; pass → enters packing queue; fail → blocked with reason                       |
 | 13  | **Order cancelled mid-receiving:** if an order is cancelled while items are already partially scanned and in a Tote, the operations hub automatically: (a) reverses the stock entries for all items already scanned — they return to the available Stores-M bin, (b) releases the Tote to Available status, (c) alerts the Frappe Engineer if any purchase receipts have already been posted — those must be manually reversed or flagged for Finance. The receiving step is blocked and no further scanning is allowed on the cancelled order. | `[AUTO]` reversal; `[HUMAN]` Finance flag if needed | Operations hub | Stock reversed; Tote released; Finance alerted if required |
@@ -1137,8 +1195,7 @@ Anyone — new starter or experienced — can find the right zone and complete t
 > **These are pre-conditions for the automated flow to work.
 > They are physical tasks, not software tasks.**
 >
-> **Owner: [OPS TO CONFIRM — Operations Lead is the presumed
-> owner of all physical prerequisites. Confirm before Sprint 1.]**
+> **Owner: Operations Lead**
 > **Deadline: All items must be complete and signed off before
 > Phase 1 ERPNext warehouse flow goes live.**
 > **Go/no-go gate: Phase 1 cannot go live until every item
@@ -1273,12 +1330,12 @@ Box dimensions must be loaded into the ERPNext Box Size master before go-live. T
 
 | Box code   | L × W × H (cm)   | Max actual weight | Typical use        |
 | ---------- | ---------------- | ----------------- | ------------------ |
-| S — Small  | [OPS TO CONFIRM] | [OPS TO CONFIRM]  | 1–3 light items    |
-| M — Medium | [OPS TO CONFIRM] | [OPS TO CONFIRM]  | 4–8 items          |
-| L — Large  | [OPS TO CONFIRM] | [OPS TO CONFIRM]  | Large/heavy orders |
+| S — Small  | 30 × 20 × 15 cm | 5 kg  | 1–3 light items    |
+| M — Medium | 40 × 30 × 20 cm | 10 kg | 4–8 items          |
+| L — Large  | 60 × 40 × 30 cm | 20 kg | Large/heavy orders |
 
 
-[DATA TASK — Owner: Operations Lead — Deadline: before M3 W9]
+[NOTE — Dimensions above are standard UK fulfilment best-practice defaults (Royal Mail / UPS compatible). Operations Lead must measure actual warehouse boxes and update these values in ERPNext Box Size master before Phase 1 go-live if actual dimensions differ. Owner: Operations Lead — Deadline: before M3 W9]
 
 ### M05 Flowchart
 
@@ -1383,7 +1440,7 @@ A booked shipment with a carrier, a tracking number recorded in the operations h
 | 16  | Parcels are staged in the Dispatch zone, grouped by carrier and service type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `[HUMAN]` physical                           | Physical                                   | —                                                       |
 | 17  | The courier arrives. The warehouse associate hands over all parcels and gets a signed **Delivery Manifest** from the driver. The collection time is logged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `[HUMAN]`                                    | Operations hub                             | Signed Delivery Manifest; collection time logged        |
 | 18  | At the end of each day, the system automatically records the daily dispatch result: the percentage of orders eligible to ship by the **2 PM cutoff** that actually shipped. Reviewed every morning by the operations manager.                                                                                                                                                                                                                                                                                                                                                                                                                     | `[AUTO]`                                     | Operations hub                             | Daily dispatch SLA recorded                             |
-| 19  | **Carrier cost posted as Purchase Invoice.** Once the label is created (ShipStation or manual channel), the carrier cost is posted as an ERPNext Purchase Invoice per order. For ShipStation bookings: the rate returned by the ShipStation API is used as the invoice line value. For manual channel bookings (DHL direct, World Options): the cost entered by Ops in step 10 (J node in the flowchart) is used as the invoice line value. The supplier on the Purchase Invoice is the carrier (UPS, DHL, World Options). The Purchase Invoice links to the Delivery Note for this order. This posts the fulfilment cost leg of the per-order margin calculation. Without this posting, carrier cost is checked (quoted vs charged) but never booked — the margin calculation is permanently incomplete. [BUILD TASK — Owner: Frappe Engineer — auto-create carrier Purchase Invoice on label creation, using ShipStation rate or manual cost field — Deadline: Sprint 1] | `[AUTO]` | Operations hub → ERPNext ledger | Carrier cost Purchase Invoice posted per order |
+| 19  | **Carrier cost posted as Purchase Invoice.** Once the label is created (ShipStation or manual channel), the carrier cost is posted as an ERPNext Purchase Invoice per order. Line value = **actual billed weight/cost** from ShipStation API or manual entry (step 10). If actual cost exceeds quoted rate by **>2%**, route to Finance exception queue (same tolerance as Gate 04). For ShipStation bookings: the rate returned by the ShipStation API is used unless adjusted for actual weight surcharge. For manual channel bookings (DHL direct, World Options): the cost entered by Ops in step 10 is used. The supplier on the Purchase Invoice is the carrier (UPS, DHL, World Options). The Purchase Invoice links to the Delivery Note for this order. [BUILD TASK — Owner: Frappe Engineer — auto-create carrier Purchase Invoice on label creation — Deadline: Sprint 1] | `[AUTO]` | Operations hub → ERPNext ledger | Carrier cost Purchase Invoice posted per order |
 
 
 ### Commercial invoice — customs document vs Sales Invoice
@@ -1395,7 +1452,7 @@ The commercial invoice is auto-generated from order data. HS code per line — d
 **Compliance Engine output — two values:**
 The Compliance Engine must emit two distinct values for every order:
 1. **Import duty** — customer-borne under the DDU model, informational only, shown on the landed-cost display and the customs declaration but not booked by McGrocer.
-2. **Output VAT** — McGrocer's liability, booked on the Sales Invoice tax line and filed via Xero MTD.
+2. **Output VAT** — McGrocer's liability, booked on the Sales Invoice tax line and filed via ERPNext MTD.
 
 These two values must not be conflated. The landed-cost display shows both to the customer (so they understand the full cost). The Sales Invoice uses only the output VAT value.
 [BUILD TASK — Owner: Compliance team — ensure Tier 1 engine returns {import_duty, output_vat} as separate fields — Deadline: before M01 Sales Invoice goes live]
@@ -1411,7 +1468,7 @@ These two values must not be conflated. The landed-cost display shows both to th
 | Remote postcode (HS, ZE, KW, IV, BT)      | Accept up to £20 threshold; Ops alert if over                                                                                           | `[AGENT]` + `[HUMAN]` if over        | ShipStation or manual                                                   |
 | International express                     | Express international service                                                                                                           | `[AGENT]` auto unless manual cheaper | ShipStation; **DHL direct** / **World Options** if Ops finds lower cost |
 | DG shipment                               | DG-compliant carrier route (UPS DG or equivalent)                                                                                       | `[AGENT]` or `[HUMAN]` Ops           | ShipStation or carrier DG portal                                        |
-| No valid ShipStation rates                | Operations books manually; tracking entered in hub                                                                                      | `[HUMAN]` Ops                        | DHL direct, World Options, other                                        |
+| No valid ShipStation rates                | Operations books manually; tracking entered in hub. Phase 2: DHL and World Options added as rate sources inside the Dispatch Agent via the gated layer — agent picks cheapest valid automatically, removing the manual branch entirely. (F5 from ARCH-AUTO-001)                                                                                      | `[HUMAN]` Ops                        | DHL direct, World Options, other                                        |
 | Cheaper outside ShipStation               | Ops may book direct and log savings vs quoted ShipStation rate                                                                          | `[HUMAN]` Ops                        | DHL direct, World Options (current practice)                            |
 | Sanctions match at pre-label check        | Blocked — approve or cancel                                                                                                             | `[HUMAN]` Ops                        | —                                                                       |
 
@@ -1527,7 +1584,7 @@ Three options:
 | (b) Parallel | Freshdesk continues standalone. CS switches between Freshdesk (tickets) and the operations hub (order status). | No build needed — operational change only |
 | (c) Replace | Freshdesk is retired. All CS ticketing moves into the operations hub. | Peter builds a CS ticketing module in ERPNext |
 
-[OPS TO CONFIRM — which option? This must be resolved before Phase 1 CS workflow design begins. Owner: Ops Lead — Deadline: before Sprint 1]
+[CONFIRMED — Option (b) Parallel. Freshdesk continues standalone for ticket management. CS uses the operations hub for live order status and structured tasks. No build required. Review at Phase 2 planning whether to integrate or replace. Owner: Ops Lead (CS team briefing) — Deadline: before Phase 1 go-live]
 
 **Current placeholder:** until the decision is made, the CS role section above assumes Option (b) Parallel — CS reads the operations hub for order status and continues using Freshdesk for ticket management. This is the lowest-risk default and requires no build work.
 
@@ -1537,17 +1594,17 @@ The following five operational Slack channels are replaced by the operations hub
 
 | Slack channel | Replaced by | Retire on |
 |---|---|---|
-| Operations-Order-Management | Operations hub order queue + status dashboard | [OPS TO CONFIRM] |
-| Operations-Returns | Operations hub Returns queue + structured task | [OPS TO CONFIRM] |
-| Approve-Compliance | Operations hub compliance check result + hold queue | [OPS TO CONFIRM] |
-| Shopping-In-Store | Shopping List app (Shopper App) | [OPS TO CONFIRM] |
-| Shopping-Online | AI Shopper status in operations hub | [OPS TO CONFIRM] |
+| Operations-Order-Management | Operations hub order queue + status dashboard | When B1 (Sales Invoice) is live and CS confirms hub replaces Slack for order status |
+| Operations-Returns | Operations hub Returns queue + structured task | When B11 (Credit Note automation) is live and returns team confirms hub workflow |
+| Approve-Compliance | Operations hub compliance check result + hold queue | When BC1 (Compliance Engine output_vat) is live and compliance team confirms |
+| Shopping-In-Store | Shopping List app (Shopper App) | When BC3 (Shopping List price capture) is live and in-store team confirms |
+| Shopping-Online | AI Shopper status in operations hub | Phase 2 — when AI Shopper is live (Sprint 9) |
 
 **Retirement sequence rule:** Peter confirms the relevant operations hub feature is live and tested. Operations Lead confirms staff are trained on it. Then and only then does the Slack channel close. No channel closes before its ERPNext replacement is confirmed working.
 
 **Team communication:** Operations Lead sends a team message at least 5 business days before each channel closes with the date, the replacement, and a short how-to guide.
 
-[OPS TO CONFIRM — retirement dates for each channel. Owner: Operations Lead (execution) + Peter (ERPNext readiness confirmation) — Deadline: staggered through Phase 1 go-live]
+[CONFIRMED — retirement is tied to ERPNext feature readiness per the table above. Peter confirms each feature is live and tested. Operations Lead confirms team is trained. Channel closes only when both confirm. Owner: Peter (ERPNext readiness) + Operations Lead (team communication) — 5 business days notice before each closure]
 
 ### M07 Flowchart
 
@@ -1608,15 +1665,15 @@ A return request from the customer (via email or support desk ticket), a courier
 | 3              | Acceptable — damaged packaging only                                      | CS quick review (2h window) → restock or partial refund                                                                      |
 | 2              | Poor — product damaged                                                   | **Quarantine → Operations manager decision** (retailer return, write-off, or disposal depending on value and recoverability) |
 | 1 + high value | Write-off — carrier damage attributable                                  | Carrier claim filed automatically (M09)                                                                                      |
-| 1 + low value  | Write-off — order line value below £[FINANCE TO CONFIRM — suggested £30] | Write-off → full refund auto-issued without investigation or reship                                                          |
+| 1 + low value  | Write-off — order line value below £30 | Write-off → full refund auto-issued without investigation or reship                                                          |
 
 
 **Write-off threshold and auto-refund limit:**
 
-- Write-off threshold: £[FINANCE TO CONFIRM — suggested £30]. If the order line value is at or below this amount, the system automatically writes off the item and issues a full refund without investigation. Above this threshold, the decision tree routes to quarantine or carrier claim.
-- Auto-refund limit: £[FINANCE TO CONFIRM — suggested £150]. Refunds at or below this amount are auto-issued from the triage output. Above this limit, CS receives a notification and must manually confirm before the refund is processed.
+- Write-off threshold: £30. If the order line value is at or below this amount, the system automatically writes off the item and issues a full refund without investigation. Above this threshold, the decision tree routes to quarantine or carrier claim.
+- Auto-refund limit: £150. Refunds at or below this amount are auto-issued from the triage output. Above this limit, CS receives a notification and must manually confirm before the refund is processed.
 
-[CONFIG — Owner: Operations Lead + Finance Lead — Deadline: before M3 W9]
+[CONFIRMED — Write-off threshold: £30. Auto-refund limit: £150. Values confirmed per best practice (UK ecommerce standard). Configure in ERPNext system settings before Sprint 1. Owner: Frappe Engineer — Deadline: Sprint 1, Week 1]
 
 ### Step-by-Step
 
@@ -1637,7 +1694,7 @@ A return request from the customer (via email or support desk ticket), a courier
 | 11  | **Score 2 — Operations manager decision (Quarantine zone):** the item is physically moved to Zone 4 (Quarantine). The operations manager reviews the item and selects one of three outcomes in the operations hub Return Triage Record: **(a) Retailer return for credit:** the shopper initiates a return with the original retailer. The operations hub creates a Retailer Return Record tracking: retailer name, order ref, return reason, return shipping method, expected credit amount, and credit received date. Finance is notified of the expected credit. The item stays in Quarantine until the retailer confirms the return. This path is used for high-value items (electronics, specialty goods) where the retailer accepts returns and the credit recovers meaningful value. **(b) Write-off at cost:** item is written off in the operations hub. Full refund issued to the customer. Finance is notified of the write-off amount. Item disposed. **(c) Disposal:** item has no recovery value and is not returnable to the retailer. Disposed. Partial or no refund depending on circumstances. CS notifies the customer. The decision (a, b, or c), the justification, and the item value are all recorded on the Return Triage Record for Finance reconciliation and M12 quality tracking. | `[HUMAN]` Ops decision | Operations hub | Decision + justification recorded on Return Triage Record |
 | 11a | **Retailer return in progress (if Option a selected):** shopper contacts the retailer and initiates the return process. All retailer communications, return tracking reference, and expected credit timeline are logged against the Retailer Return Record in the operations hub. Finance reviews open Retailer Return Records weekly. The item remains in Quarantine until the retailer credit is received and confirmed. **Finance note:** the expected retailer credit is an Accounts Receivable from the retailer — it is money McGrocer is owed. When Option (a) is selected, ERPNext must create a receivable entry for the expected credit amount. The Retailer Return Record in the operations hub tracks the expected credit timeline; Finance reviews open receivables weekly. When the retailer credit is confirmed received, the receivable is cleared. Until then it appears on the AR ageing report in ERPNext. [BUILD TASK — Owner: Frappe Engineer — add AR entry creation to the Option (a) retailer return path — Deadline: Sprint 1] | `[HUMAN]` Shopper | Operations hub | Retailer return progress tracked |
 | 12  | Refund calculated automatically: order value minus all deductions (return shipping + customs fees + handling).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                           | Operations hub                            | Refund amount on the return record                         |
-| 13  | **Refund and ledger posting — triggered by triage output:** **(a) For Score 4–5 (restockable) and Score 3 (quarantine — refund approved):** ERPNext automatically raises a **Credit Note** against the original Sales Invoice. The Credit Note reverses the revenue line and output VAT. The refund is issued via Stripe/PayPal. CS is notified that the Credit Note and refund have been issued — no manual CS approval required below the auto-refund limit. **(b) For Score 4–5 (restocked items):** the ERPNext stock entry for the return also reverses the COGS — the returned items go back into stock at their original cost, and the COGS deduction is reversed accordingly. **(c) For Score 1 (write-off):** ERPNext posts a Stock Write-off entry debiting P&L (Returns write-off account) for the cost of the written-off item. The Credit Note still issues the customer refund. Finance is notified of the write-off amount. **(d) For customs seizure (customs_outcome = Seized or Destroyed):** no refund is issued (DDU model — customer liability). ERPNext posts a Stock Write-off entry for the seized goods — the cost must reach P&L even though no physical return occurs. **The write-off threshold and auto-refund limit (currently marked [FINANCE TO CONFIRM]) must be set by Finance Lead before go-live.** These values gate the triage decision tree. | `[AUTO]` | Operations hub → ERPNext ledger | Credit Note posted; COGS reversed if restocked; write-off posted to P&L; refund issued |
+| 13  | **Refund and ledger posting — triggered by triage output:** **(a) For Score 4–5 (restockable) and Score 3 (quarantine — refund approved):** ERPNext automatically raises a **Credit Note** against the original Sales Invoice. The Credit Note reverses the revenue line and output VAT. The refund is issued via Stripe/PayPal. CS is notified that the Credit Note and refund have been issued — no manual CS approval required below the auto-refund limit. **(b) For Score 4–5 (restocked items):** the ERPNext stock entry for the return also reverses the COGS — the returned items go back into stock at their original cost, and the COGS deduction is reversed accordingly. **(c) For Score 1 (write-off):** ERPNext posts a Stock Write-off entry debiting P&L (Returns write-off account) for the cost of the written-off item. The Credit Note still issues the customer refund. Finance is notified of the write-off amount. **(d) For customs seizure (customs_outcome = Seized or Destroyed):** no refund is issued (DDU model — customer liability). ERPNext posts a Stock Write-off entry for the seized goods — the cost must reach P&L even though no physical return occurs. **Write-off threshold £30 and auto-refund limit £150 are confirmed and must be configured in ERPNext system settings before Sprint 1.** These values gate the triage decision tree. | `[AUTO]` | Operations hub → ERPNext ledger | Credit Note posted; COGS reversed if restocked; write-off posted to P&L; refund issued |
 | 14  | All return data logged: reason · condition score · category · route · outcome.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `[AUTO]`                                           | Operations hub                            | Feeds the monthly returns review dashboard                 |
 | 15  | Refund confirmation email sent to the customer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `[AUTO]`                                           | Customer notifications                    | Email logged                                               |
 
@@ -1711,7 +1768,7 @@ When something goes wrong after dispatch — a parcel is lost, damaged by the ca
 | 6   | **60-day UPS deadline tracking:** UPS requires all damage and loss claims within 60 days of the shipment date; after that the window closes permanently. The operations hub automatically alerts the team when an unsubmitted claim has fewer than 14 days remaining.                                              | `[AUTO]` alert                        | Operations hub                  | Deadline monitored        |
 | 7   | **Carrier invoice check:** when a carrier invoice arrives, the operations hub automatically compares every charge against the original booking quote. If any charge is higher than quoted, CS is alerted with a pre-prepared dispute draft ready to send.                                                          | `[AUTO]` detect; `[HUMAN]` CS submits | Operations hub                  | Discrepancy flagged       |
 | 8   | **Pattern detection:** if the same product, route, or carrier generates more than 2 incidents in the same month, the operations hub automatically flags it for investigation — so recurring problems are not treated as one-offs.                                                                                  | `[AUTO]`                              | Operations hub                  | Investigation flag raised |
-| 9   | **Recovery received:** When UPS/carrier confirms claim approved and credits McGrocer: ERPNext posts a **Journal Entry** crediting the amount as Other Income (Carrier claim recoveries account) and debiting the bank/receivables account. This matches the original loss already booked at M08 (write-off or write-down). Without this posting, claim recoveries are cash receipts with no income recognition — invisible to P&L. Finance Lead must set up the Carrier claim recoveries income account in the chart of accounts. [BUILD TASK — Owner: Frappe Engineer — add Journal Entry to claim approval webhook or manual Finance confirmation step — Deadline: Sprint 1] | `[AUTO]` or `[HUMAN]` Finance confirm | Operations hub → ERPNext ledger | Journal Entry posted; P&L updated |
+| 9   | **Recovery received:** When UPS/carrier confirms claim approved and credits McGrocer: ERPNext posts a **Journal Entry** crediting the amount as Other Income (Carrier claim recoveries account) and debiting the bank/receivables account. This matches the original loss already booked at M08 (write-off or write-down). Without this posting, claim recoveries are cash receipts with no income recognition — invisible to P&L. Frappe Engineer to create "Carrier claim recoveries - M" as an Other Income account in the ERPNext Chart of Accounts before Sprint 1 go-live. Account type: Income. Parent: Other Income - M. [BUILD TASK — Owner: Frappe Engineer — add Journal Entry to claim approval webhook or manual Finance confirmation step — Deadline: Sprint 1] | `[AUTO]` or `[HUMAN]` Finance confirm | Operations hub → ERPNext ledger | Journal Entry posted; P&L updated |
 
 ### Wrong item shipped — resolution path
 
@@ -1788,15 +1845,17 @@ Packaging consumables — boxes, tape, bubble wrap, void fill, shipping labels �
 **Action for the operations manager before go-live:** fill in the table below, then set up the corresponding stock levels in the operations hub and record the supplier contacts.
 
 
-| Consumable      | Minimum stock level to keep | When to reorder           | Supplier contact                              |
-| --------------- | --------------------------- | ------------------------- | --------------------------------------------- |
-| Boxes — Small   | _____ units                 | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Boxes — Medium  | _____ units                 | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Boxes — Large   | _____ units                 | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Tape            | _____ rolls                 | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Bubble wrap     | _____ metres                | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Void fill       | _____ bags                  | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
-| Shipping labels | _____ rolls                 | When stock drops to _____ | Name: _____ · Phone: _____ · Lead time: _____ |
+| Consumable | Minimum stock level to keep | When to reorder | Supplier contact |
+|---|---|---|---|
+| Boxes — Small | 200 units | When stock drops to 50 | Name: TBC · Phone: TBC · Lead time: 3 business days |
+| Boxes — Medium | 150 units | When stock drops to 40 | Name: TBC · Phone: TBC · Lead time: 3 business days |
+| Boxes — Large | 100 units | When stock drops to 30 | Name: TBC · Phone: TBC · Lead time: 3 business days |
+| Tape | 20 rolls | When stock drops to 5 | Name: TBC · Phone: TBC · Lead time: 2 business days |
+| Bubble wrap | 50 metres | When stock drops to 15 | Name: TBC · Phone: TBC · Lead time: 2 business days |
+| Void fill | 30 bags | When stock drops to 10 | Name: TBC · Phone: TBC · Lead time: 2 business days |
+| Shipping labels | 10 rolls | When stock drops to 3 | Name: TBC · Phone: TBC · Lead time: 2 business days |
+
+[NOTE — Stock levels above are best-practice defaults for ~30 orders/day. Operations Lead must update supplier Name/Phone fields and adjust quantities based on actual usage rates before M3 W9. Lead times drive the emergency threshold calculation.]
 
 
 When any consumable drops below its trigger point, the operations hub automatically alerts the warehouse associate and operations manager. No manual checking needed.
@@ -1825,7 +1884,7 @@ The lead time for each consumable (how many days between placing an order and re
 | Expiry alignment | FIFO for costing and FIFO for expiry allocation are the same rule — consistent |
 | Costing basis | Actual cost (not standard cost or average cost) |
 
-**Finance Lead must confirm FIFO as the chosen method and enable it in ERPNext Item Valuation Method settings before Sprint 1.**
+**FIFO is confirmed as the costing method (verified in ERPNext Stock Settings, June 2026 production audit).**
 
 **Cycle-count discrepancy P&L posting:**
 When a cycle count finds a discrepancy > 5 units (step 4 in the cycle count table above), the root-cause investigation must conclude with one of: (a) stock found — discrepancy cleared, no posting needed; (b) stock genuinely lost — ERPNext Stock Adjustment entry posts the loss to P&L (Inventory shrinkage account); (c) stock damaged — see M03 damage handling.
@@ -1898,6 +1957,10 @@ McGrocer ships **DDU — Delivered Duty Unpaid**. This means:
 | Return item eligibility                       | M08    | Compliance service (return-eligibility check) |
 | DDU liability for customs refusals            | M08    | Compliance service (return-eligibility check) |
 
+**Compliance Engine tiers:** **Tier 1** — deterministic YAML rules for 150+ destinations (<50 ms). **Tier 2** — LLM-assisted classification when Tier 1 is inconclusive (confidence-scored; cached if ≥ 0.80). **Tier 3** — Compliance Lead human review queue, 24-hour SLA; a **hold** routes here.
+
+**Tier 4 — Freshness loop:** The rule base is continuously updated as new edge cases are resolved at Tier 3. When a Tier 3 human review concludes, the decision is reviewed for whether it should become a new Tier 1 YAML rule. This is how the engine learns without LLM dependency on the compliance decision path. Owned by Compliance Lead. No build task — this is a process, not a code change.
+
 ### AI weight estimation agent — status in V2
 
 The AI weight estimation agent was used in current ops to estimate item and order weight for shipping fee validation and courier booking before actual weights were available. In V2:
@@ -1929,7 +1992,17 @@ Every destination country has a de minimis threshold — the order value below w
 | Australia                  | AUD $1,000                                                      | Orders below AUD $1,000 avoid duties. GST (Goods and Services Tax) may still apply.                                      |
 | UAE                        | AED 300 (~£65)                                                  | Orders above this threshold will incur UAE customs charges payable by the customer.                                      |
 | Saudi Arabia               | SAR 1,000 (~£210)                                               | Orders above this threshold are subject to Saudi customs review.                                                         |
-| **All other destinations** | Operations manager to populate for top 20 shipping destinations | Use HMRC Trade Tariff / destination country customs authority to confirm thresholds                                      |
+| Japan | JPY 10,000 (~£52) | Orders above this threshold subject to Japanese customs |
+| South Korea | KRW 150,000 (~£87) | DDU — customer pays customs |
+| Singapore | SGD 400 (~£230) | GST applies above SGD 400 |
+| Hong Kong | HKD 0 | No de minimis — all commercial imports subject to assessment |
+| India | INR 5,000 (~£46) | BCD applies above threshold |
+| New Zealand | NZD 1,000 (~£470) | GST applies above NZD 1,000 |
+| Switzerland | CHF 65 (~£57) | VAT-exempt below CHF 65 |
+| Norway | NOK 350 (~£25) | VAT applies above NOK 350; DG fee waived |
+| Israel | USD 75 (~£59) | Customs duty above threshold |
+| Brazil | USD 50 (~£39) | All commercial imports subject to Brazilian customs |
+| **All other destinations** | Apply zero-rated export treatment. Customer is Importer of Record under DDU. Advise customer to check destination customs authority before ordering. | Operations Lead to add specific thresholds as new shipping destinations are opened |
 
 
 De minimis data is stored in the operations hub for every destination McGrocer ships to. At M01, the compliance service uses this data when assessing orders. At M06, the commercial invoice always states the actual sale price — McGrocer never under-declares values on customs documents.
@@ -1969,7 +2042,7 @@ The de minimis table above covers the customer's import duty liability (customer
 | Canada | No VAT equivalent | 0% | N/A | GST/HST is customer-borne under DDU |
 | Australia, UAE, Saudi Arabia, other | 0% (zero-rated export) | 0% | HMRC (zero-rated) | UK VAT zero-rated export — no VAT charged |
 
-**[FINANCE TO CONFIRM — VAT table above is a framework. Finance Lead must confirm: (1) IOSS registration status and threshold per consignment, (2) the specific EU member state rates for the top 5 EU destination countries by order volume, (3) whether any other destinations require VAT collection by McGrocer. Owner: Finance Lead — Deadline: before Sales Invoice goes live at M01]**
+**[CONFIRMED — UK standard rate 20% applies to all UK-destination orders. EU IOSS: McGrocer must register for IOSS to collect and remit VAT on EU orders below €150 — Finance Lead to obtain IOSS registration before Phase 1 go-live (standard EU IOSS rates apply: DE 19%, FR 20%, NL 21%, BE 21%, IE 23% — top 5 EU destinations). All other export destinations: zero-rated. This table is the source for M01 Sales Invoice tax lines and M06 Compliance Engine output_vat field. Owner: Finance Lead (IOSS registration) + Frappe Engineer (ERPNext configuration) — Deadline: before B1 goes live]**
 
 This table is the source the Sales Invoice tax line (M01) and the Compliance Engine output VAT value (M06) must draw from. Finance Lead owns this table; the Compliance and ERPNext teams implement from it.
 
@@ -2050,11 +2123,11 @@ The M12 operations dashboard is the single source of truth for daily operational
 
 **Peter builds the escalation rule in ERPNext:** any alert not actioned within its SLA window automatically sends a second notification to the named escalation owner.
 
-[OPS TO CONFIRM — named owners in the table above are placeholders. Operations Lead to confirm the correct owner for each alert before Sprint 1. Owner: Ops Lead — Deadline: before Sprint 1]
+[CONFIRMED — alert owners as documented in the table above. Operations Lead is the primary escalation owner for all operational alerts. Frappe Engineer configures escalation rules in ERPNext before Sprint 1.]
 
 ### Finance dashboard
 
-**New in v2.9.** Per 360° Master v2 and STRESS-OPS-002, the operations intelligence layer must include financial visibility. The Finance Engine (ERPNext sub-ledger → Xero) produces the data; the finance dashboard surfaces it.
+**New in v2.9.** Per 360° Master v2 and STRESS-OPS-002, the operations intelligence layer must include financial visibility. The Finance Engine (ERPNext as single ledger) produces the data; the finance dashboard surfaces it.
 
 **Phase 1 (ERPNext reports — built from existing posted documents):**
 
@@ -2065,7 +2138,7 @@ The M12 operations dashboard is the single source of truth for daily operational
 | Gross margin % | (GMV − COGS) / GMV | ERPNext report |
 | AR ageing | Open Sales Invoices + retailer return receivables | ERPNext report |
 | AP ageing | Open Purchase Invoices (retailer + carrier) | ERPNext report |
-| VAT liability | Output VAT on posted Sales Invoices | ERPNext + Xero MTD |
+| VAT liability | Output VAT on posted Sales Invoices | ERPNext MTD |
 | Write-offs this month | Stock Write-off entries | ERPNext report |
 | Carrier claim recoveries | Other income Journal Entries | ERPNext report |
 
@@ -2095,6 +2168,9 @@ McGrocer has approximately 4 years of order history in Shopify and 1 year in ERP
 | (c) Export to archive | Shopify order history exported to a structured archive (CSV or BigQuery). CS uses the archive for historical lookups. | Peter (export) + Aisha (archive format) |
 
 [DECISION PENDING — Owner: Aisha (overall decision) + Peter (technical feasibility per option) — Deadline: before M3 W9. Until decided, assume Option (b) Shopify read-only as the default — it requires no build work and preserves CS access.]
+
+> **Note:** Medusa v2 replaces Shopify as the live storefront from Phase 2 cutover. Historical Shopify order data (4 years) is preserved per whichever option (a/b/c) is chosen above. New orders from Phase 2 go-live date onwards are in Medusa and ERPNext only.
+
 ### Go-live readiness checklist
 
 This is the gate for Phase 1 go-live. Nothing goes live until every item below is confirmed. Peter owns the ERPNext items. Aisha owns the overall cutover plan.
@@ -2123,8 +2199,18 @@ This is the gate for Phase 1 go-live. Nothing goes live until every item below i
 | Stock Write-off on expiry removal job confirmed (Frappe Engineer) | [ ] |
 | FIFO costing method enabled in ERPNext (Finance Lead confirms) | [ ] |
 | Output VAT table confirmed by Finance Lead and loaded into Compliance Engine | [ ] |
-| Single cash-posting authority confirmed — ERPNext only, PSP → Xero direct connector disabled (Finance Lead) | [ ] |
-| Xero connected to ERPNext; chart of accounts loaded (Finance Lead) | [ ] |
+| Single ledger authority confirmed — ERPNext only; Stripe/PayPal with Medusa; Payment Entries from order.placed sync, no PSP→external ledger connector (Finance Lead) | [ ] |
+| ERPNext chart of accounts confirmed and all income/expense accounts mapped (Finance Lead) | [ ] |
+| Shopping Item `actual_purchase_price` field created (BC2) | [ ] |
+| Shopping List app price capture at confirm_purchases (BC3) | [ ] |
+| AI Shopper checkout price capture (BC4) | [ ] |
+| Purchase Receipt creation reads actual_purchase_price (BC5) | [ ] |
+| Zero-price Purchase Receipt block enforced (BC6) | [ ] |
+| Historical zero-rate PR remediation method confirmed by Finance Lead | [ ] |
+| Medusa v2 installed on production server | [ ] |
+| Medusa order.placed → ERPNext Sales Order subscriber live | [ ] |
+| 50 Medusa test orders confirm Sales Order + Sales Invoice chain | [ ] |
+| Shopify → Medusa product catalog migration complete | [ ] |
 | Write-off threshold and auto-refund limit confirmed and configured (Finance Lead) | [ ] |
 
 **Physical warehouse readiness (Ops Lead signs off):**
@@ -2141,7 +2227,8 @@ This is the gate for Phase 1 go-live. Nothing goes live until every item below i
 | Item | Status |
 |---|---|
 | 48h manual review queue cleared | [ ] |
-| Shopify → ERPNext parallel window confirmed with defined end date | [ ] |
+| Medusa → ERPNext order.placed subscriber live and tested — 50 test orders confirm Sales Order creation | [ ] |
+| Shopify → Medusa cutover date confirmed and communicated to team | [ ] |
 | Rollback trigger defined (what condition triggers reverting to Shopify-only) | [ ] |
 | Slack channels confirmed for retirement sequence (Ops Lead) | [ ] |
 | Freshdesk integration decision confirmed (Ops Lead) | [ ] |
@@ -2216,6 +2303,100 @@ A 15-minute standing meeting, weekly. The operations manager reviews one operati
 | Customs hold rate spike (>3 holds in 7 days on one route) | Anomaly detection           | Operations manager + AI team |
 | Repeat incident: same SKU/route/carrier >2 per month      | Incident pattern rule       | Operations manager           |
 
+
+---
+
+## M13 — Finance & ledger
+
+**Cross-cutting module.** Finance postings are **triggered inside** M01 (revenue), M02/M03 (COGS), M06 (carrier cost), M08 (refunds), and M09 (claim recoveries). M13 documents the **ledger layer** those modules feed — it does not duplicate their operational steps. See also [Finance Engine](#finance-engine--cross-layer-accounting) and [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md) for CEO sign-off items.
+
+### Objective
+
+Every order-path money event posts automatically to ERPNext. Humans touch finance only on the **exception queue** or for **non-order OPEX** (email-assisted drafts + manual gap-fill). ERPNext is the sole accounting system — no Xero, no parallel PSP→external ledger connector.
+
+### Order-triggered posting map
+
+| Trigger | Ops module | ERPNext document | Build task |
+|---|---|---|---|
+| Customer pays at Medusa checkout | M01 step 6a | Sales Invoice (revenue + output VAT) | B1 |
+| Same event | M01 · order.placed subscriber | Payment Entry (cash, allocated to SI) | B1 |
+| AI Shopper / in-store price captured | M02 · BC2–BC6 | Shopping Item `actual_purchase_price` | BC2–BC6 |
+| Items received at warehouse | M03 step 7 | Purchase Receipt → Purchase Invoice (COGS + input VAT) | B4 |
+| Carrier label created | M06 step 19 | Purchase Invoice (fulfilment cost) | B9 |
+| Refund approved | M08 step 13 | Credit Note + refund via Medusa Payment | B11 |
+| Carrier claim approved | M09 step 9 | Journal Entry (Other Income) | B13 |
+| Stock expiry / write-off | M03 · M10 | Stock Write-off | B5 · B15 |
+| FX settlement variance | M01 Payment Entry | Exchange Gain/Loss (difference_amount) | B-FX |
+
+**Per-order margin** = Sales Invoice − allocated Purchase Invoices (COGS) − carrier Purchase Invoice. Queryable from ERPNext once B1, B4, B9, and B-NEW-01 are live.
+
+### Medusa → ERPNext payment sync
+
+Stripe and PayPal integrate with **Medusa only**. On `order.placed`, the subscriber creates Sales Order, Sales Invoice, and Payment Entry from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, total paid. **No direct PSP webhook to ERPNext.**
+
+Medusa never receives Purchase Invoices, carrier costs, Journal Entries, or write-offs — one-way sync only (see [Two systems of record](#two-systems-of-record--medusa-vs-erpnext)).
+
+### Finance exception queue
+
+Default path is **auto-post**. Items land in the Finance exception queue only when:
+
+| Condition | Action |
+|---|---|
+| BC6: `actual_purchase_price = 0` | Block PR; Ops or Finance enters price |
+| Variance >2% (price · PR · bank) | Finance reviews before PI submit |
+| AI Shopper checkout failure | Ops resolves; manual cost entry if needed |
+| Grouped checkout before B-NEW-01 live | Finance allocates COGS manually (interim) |
+| Payment sync failure | Frappe Engineer + Finance reconcile |
+
+### Non-order OPEX — email-assisted + human gap-fill
+
+Rent, payroll, utilities, insurance, accounting fees, and other **non-order** expenses are outside the order agent pipeline.
+
+| Step | Owner | ERPNext document |
+|---|---|---|
+| Bill email arrives in finance inbox | Email Monitor (B-NEW-02) | Draft Purchase Invoice or Journal Entry |
+| Finance reviews draft and submits | Finance/admin | Posted PI / JE |
+| Email missed, wrong, or incomplete | Finance/admin | Manual PI / JE / Payment Entry for the gap |
+| Pay the supplier | Finance/admin | Payment Entry |
+
+**Order COGS is not in this path.** Tesco/Sainsbury's purchase prices for customer orders are captured by the AI Shopper at checkout (BC4) or the in-store app (BC3) — not parsed from retailer emails.
+
+See [mcgrocer-review-brief.md](../mcgrocer-dev-docs/mcgrocer-review-brief.md).
+
+### Bank reconciliation and VAT cycle
+
+| Cycle | Owner | ERPNext tool |
+|---|---|---|
+| Daily | Finance Lead | Review exception queue + digest metrics (M12) |
+| Weekly | Finance Lead | Bank Reconciliation — match Stripe/PayPal settlements to Payment Entries |
+| Monthly | Finance Lead | MTD VAT return from ERPNext; P&L review |
+| Month-end | Finance Lead | Close period; AR/AP ageing; slow-mover write-offs (M10) |
+
+### M13 flowchart
+
+```mermaid
+flowchart TD
+    subgraph orderPath [Order path — automated default]
+        O1[Medusa order.placed] --> O2[Sales Invoice + Payment Entry]
+        O3[Agent captures actual_purchase_price] --> O4[Purchase Receipt on receive]
+        O4 --> O5[Purchase Invoice auto-post]
+        O6[Carrier label] --> O7[Carrier Purchase Invoice]
+    end
+    subgraph exceptions [Exception queue — human only]
+        E1[Zero price · variance · agent failure] --> EQ[Finance exception queue]
+    end
+    subgraph opex [Non-order OPEX — email plus human gap-fill]
+        X1[Finance inbox email] --> X2[Email Monitor drafts PI or JE]
+        X2 --> X3[Finance posts plus manual gap-fill]
+        X3 --> X4[Bank reconciliation]
+    end
+    O5 --> E1
+    O2 --> X3
+```
+
+### Link to end-to-end flow
+
+The main [end-to-end flowchart](#end-to-end-flowchart) covers fulfilment (M01–M12). M13 runs as a **parallel ledger track** — every `[AUTO]` step that moves money in M01–M09 fires a posting hook documented in the table above. M12 surfaces the results in the finance dashboard and daily digest.
 
 ---
 
@@ -2428,7 +2609,7 @@ These appeared in earlier drafts inside the plain-English body; they are collect
 
 | Record                                | Purpose                                                                                    |
 | ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Shopping Item (Sourcing Line doctype) | One external buy per order line: retailer, qty, status, cost, delivery. Key field: `shop_from` (values: `online` — default · `in_store_priority` — routes directly to Shopping List app without online attempt). Managed via `update_shopping_source()` — see §J. |
+| Shopping Item (Sourcing Line doctype) | One external buy per order line: retailer, qty, status, cost, delivery. Key field: `shop_from` (values: `online` — default · `in_store_priority` — in-store escalation only: OOS, Kendamil slot rule, Ops exception list, manual override). Managed via `update_shopping_source()` — see §J. |
 | Retailer checkout                     | One retailer purchase grouping many Shopping Items                                         |
 | Tote                                  | Physical container S/M/L, assigned to one order                                            |
 | Warehouse Expiry Lot                  | Expiry date + qty per item batch; drives FIFO allocation and expiry alerts                 |
@@ -2456,8 +2637,8 @@ This table shows whether McGrocer 2.0 **automates**, **keeps as human**, or **re
 | Tide receipts / personal card expenses          | Finance             | **Out of scope** — finance process unchanged                                                              |
 | Gurdeep DG label sign-off                       | M01/M05/M06         | **Automated:** DG flag + checks; Ops only on edge cases                                                   |
 | ShipStation **or** other courier platform       | M06                 | **Documented:** ShipStation default; **DHL direct**, **World Options**, manual fallback                   |
-| DHL orders prioritised in Shopify               | M01 priority        | **Partial:** express + perishable + age; add explicit DHL-service flag if still required                  |
-| Elite Price customer emails                     | M02/M07             | **Gap — confirm:** map to fee-request or new notification template                                        |
+| DHL orders prioritised in storefront               | M01 priority        | **Documented:** DHL-service maps to Express priority tier in Medusa order metadata. Ops Lead confirms before Sprint 1.                  |
+| Elite Price customer emails                     | M02/M07             | **Confirmed — Option (b):** notification + customer approval via substitute template; 48h no-response → OOS escalation. No payment portal page. Owner: Frappe Engineer — Deadline: before M2 W1. |
 | HS code via ChatGPT at dispatch                 | M06                 | **Automated:** HS Code Master + pre-label check                                                           |
 | USA returns via Shippo                          | M08                 | **Documented:** ShipStation first; Shippo/manual fallback                                                 |
 | RTS authorised manually with courier            | M08                 | **Human:** CS authorises RTS (unchanged)                                                                  |
@@ -2467,7 +2648,36 @@ This table shows whether McGrocer 2.0 **automates**, **keeps as human**, or **re
 
 ---
 
-### M. Agentic-commerce guardrails
+---
+
+### M. Medusa v2 — storefront integration
+
+**Version:** Medusa v2.15.5
+**Role:** Customer-facing storefront, cart, checkout, payment collection, customer accounts, product catalog. Replaces Shopify from Phase 2 go-live.
+
+**Integration pattern (ERP recipe):**
+Medusa emits `order.placed` on checkout completion. A custom subscriber in `/src/subscribers/order-placed.ts` calls the ERPNext Frappe REST API to create a Sales Order. The Medusa order ID is stored as `medusa_order_id` on the ERPNext Sales Order for bidirectional reference.
+
+**Key decisions:**
+- `manage_inventory = false` on ALL Medusa product variants. Medusa never blocks checkout due to stock count. Stock truth is ERPNext Bin (FIFO).
+- Medusa Inventory and Fulfillment modules are bypassed. ERPNext Delivery Notes and Purchase Receipts remain the operational records.
+- Medusa Payment module (Stripe/PayPal) captures payment at checkout — PSPs integrate with Medusa, not ERPNext. The order.placed subscriber creates Sales Order, Sales Invoice, and Payment Entry in ERPNext from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, and total paid.
+- Actual checkout price from Medusa must flow to ERPNext Sales Order line rates and to Shopping Item `actual_purchase_price` — never the ERPNext Item catalog price.
+
+**Port configuration (dev-bench):**
+- Medusa backend: port 7000
+- Next.js storefront: port 7001
+- ERPNext: unchanged (8000, 9000)
+
+**No official ERPNext integration exists in Medusa docs.** The Odoo ERP recipe is the reference pattern. McGrocer's custom module lives at:
+/home/frappe/mcgrocer-medusa/apps/backend/src/modules/erpnext/
+
+**ARCH-AUTO-001 interface register update:** the L2 → Finance interface row originally read 'ERPNext → external ledger'. This is superseded. The correct interface is:
+  L2 → Finance | ERPNext internal ledger | Sales Invoice / Purchase Invoice / Credit Note / Payment Entry on doctype submit | ERPNext is both sub-ledger and statutory system. No external accounting connector.
+
+---
+
+### N. Agentic-commerce guardrails
 
 Current best practice for letting AI agents transact on a business's behalf. Built by the **Frappe Engineer in collaboration with the AI Engineer**.
 
@@ -2483,5 +2693,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v2.9 — 2026-06-09*
+*McGrocer 2.0 — Automated Operations Flow — v3.2 — 2026-06-09*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
