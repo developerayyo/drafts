@@ -1,6 +1,8 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 3.4 — 2026-06-09**
+**Version 3.6 — 2026-06-09**
+**Changelog — v3.6:** AI Shopper spend cap reduced to £200 (CEO confirmed — will increase once checkout accuracy validated); In-store Shopping List app enhanced with mobile barcode scanning to verify product match before purchase (BarcodeDetector API + ZXing-js fallback, no app install required, build task BC3-SCAN added); M13 Phase 1 manual OPEX SOP made explicit for pre-B-NEW-02 period.
+**Changelog — v3.5:** Xero reinstated as statutory ledger per CEO confirmation — Xero is already live at McGrocer, HMRC-connected for MTD VAT, and bank-connected via open banking. ERPNext remains the operational sub-ledger; all posting documents sync one-directionally to Xero on submit. Xero never writes back to ERPNext. Cash-posting authority clarified: ERPNext posts accounting entries from Medusa order.placed; Xero reconciles bank settlements via native PSP feeds. Three systems of record documented: Medusa (storefront) · ERPNext (sub-ledger) · Xero (statutory). No double-booking risk.
 **Changelog — v3.4:** STRESS-OPS closure — 90% auto-proceed if outstanding ≤£30; spend-cap deputy + 4h timeout; carrier PI at actual cost + 2% exception; M03-3 retailer credit cross-ref; review brief + findings closure register.
 **Changelog — v3.3:** Order COGS from AI checkout success (BC4) — no email for purchase price; M03 step 7 auto-submits PI from `actual_purchase_price`; Email Monitor scoped to OPEX finance inbox only (B-NEW-02) with human gap-fill; CEO brief in mike-review-brief.md.
 **Changelog — v3.2:** Finance Architecture Alignment — ERPNext sole ledger (no Xero); Medusa-only PSP with Payment Entry from order.placed sync; agent-first finance model + exception queue; M13 Finance & ledger module; online-first shopping; OPEX email-assisted (B-NEW-02) + human gap-fill; assumptions register for CEO sign-off.
@@ -576,51 +578,62 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 
 ## Finance Engine — cross-layer accounting
 
-**Architecture update (V3.0):** The 360-Master v2 Finance Engine described ERPNext sub-ledger → external statutory ledger → bank. This is updated: ERPNext is the sole accounting system. There is no external accounting layer. ERPNext handles sub-ledger, statutory accounts, VAT filing (MTD), and bank reconciliation directly. All 360-Master v2 Finance Engine references to a separate statutory system should be read as ERPNext.
+**Architecture (V3.4 confirmed):** ERPNext is the operational sub-ledger — all posting documents (Sales Invoice, Purchase Invoice, Credit Note, Payment Entry, Journal Entry, Stock Write-off) are created and submitted here first. Xero is the statutory ledger — it receives a one-directional sync from ERPNext on every doctype submit and is the system McGrocer's accountant and HMRC see. Xero never writes back to ERPNext. Xero is already live at McGrocer and connects natively to: HMRC (MTD VAT filing), UK bank accounts (open banking feed), and Stripe/PayPal (settlement reconciliation).
 
 **New in v2.9 — established as a first-class cross-layer system per 360° Master v2.**
 
-The Finance Engine is not a separate application. It is the ERPNext accounting layer, correctly wired to fire at the right trigger points in the operations flow. Every module that moves goods or money must leave a posting document in ERPNext. ERPNext is both the sub-ledger and the statutory accounting system. All VAT filing, bank reconciliation, and P&L reporting runs from ERPNext directly.
+The Finance Engine is not a separate application. It is the ERPNext accounting layer, correctly wired to fire at the right trigger points in the operations flow. Every module that moves goods or money must leave a posting document in ERPNext first; statutory P&L, Balance Sheet, MTD VAT filing, and bank reconciliation run in Xero from the one-way sync.
 
-### Money flow — ERPNext as single ledger
+### Money flow — ERPNext sub-ledger → Xero statutory ledger
 
-| Source | ERPNext document |
-|---|---|
-| Customer pays at Medusa checkout (Stripe/PayPal via Medusa Payment module) | Sales Invoice — revenue + output VAT; Payment Entry — cash side (amounts from synced order) |
-| Retailer purchase (AI Shopper + in-store) | Purchase Invoice — COGS + input VAT |
-| Carrier cost (ShipStation/DHL/World Options) | Purchase Invoice — fulfilment cost |
-| Refund issued | Credit Note — reverses revenue |
-| Stock write-off (expired, seized, damaged) | Stock Write-off entry — hits P&L |
-| Carrier claim recovery | Journal Entry — other income |
-| Payment received (from Medusa order sync) | Payment Entry — allocated against Sales Invoice |
+| Source | ERPNext document | Syncs to Xero |
+|---|---|---|
+| Customer pays at Medusa checkout (Stripe/PayPal via Medusa Payment module) | Sales Invoice — revenue + output VAT; Payment Entry — cash side | Invoice + payment in Xero |
+| Retailer purchase (AI Shopper + in-store) | Purchase Invoice — COGS + input VAT | Bill in Xero |
+| Carrier cost (ShipStation/DHL/World Options) | Purchase Invoice — fulfilment cost | Bill in Xero |
+| Refund issued | Credit Note — reverses revenue | Credit note in Xero |
+| Stock write-off (expired, seized, damaged) | Stock Write-off entry — hits P&L | Journal entry in Xero |
+| Carrier claim recovery | Journal Entry — other income | Journal entry in Xero |
+| FX settlement variance | Payment Entry — Exchange Gain/Loss | Reconciliation in Xero |
+| Bank reconciliation | Stripe/PayPal settle into bank — Xero matches via open banking feed | Xero only — not in ERPNext |
+| MTD VAT return | ERPNext VAT report confirms figures | Xero files to HMRC |
 
 **Per-order contribution margin** = Revenue (Sales Invoice) − COGS (Purchase Invoices, allocated) − Carrier cost (Purchase Invoice). This is a real, queryable number from the ledger once all three document types are wired.
 
-### Two systems of record — Medusa vs ERPNext
+### Three systems of record — conflict precedence
 
-McGrocer uses two systems the same way Shopify + ERPNext work today: **Medusa holds the storefront order; ERPNext holds the full ledger.** They share minimal data — not a mirror of every financial event.
+McGrocer runs three systems that hold overlapping financial facts. When they disagree, this is the precedence order:
 
-| Medusa (storefront — minimal) | ERPNext (operations hub + ledger — full) |
+| Decision type | Authoritative source | Reason |
+|---|---|---|
+| Revenue, COGS, carrier cost, write-offs, refunds, FX — per-order | ERPNext | Operational sub-ledger; per-order margin calculated here |
+| Statutory P&L, Balance Sheet, VAT position, bank reconciliation | Xero | Statutory ledger; fed from ERPNext; HMRC-connected |
+| Storefront order state, checkout prices, payment capture status | Medusa / Postgres | Storefront system of record |
+
+**Sync direction:**
+- Medusa → ERPNext: order.placed event creates Sales Order, Sales Invoice, Payment Entry
+- ERPNext → Xero: every submitted document syncs one-way to Xero
+- Xero → ERPNext: never
+- Xero → Medusa: never
+- Stripe/PayPal → Medusa: checkout capture
+- Stripe/PayPal → Xero: settlement reconciliation via Xero native PSP feeds
+- Stripe/PayPal → ERPNext: never directly (amounts come via Medusa order.placed subscriber only)
+
+**No double-booking:**
+ERPNext posts the accounting entry from the Medusa order payload. Xero reconciles the actual bank settlement via its own PSP feed. These are different functions on the same money event — ERPNext records what should have been received; Xero confirms what was actually settled. Any variance surfaces in Xero bank reconciliation.
+
+**Medusa vs ERPNext data split** (storefront vs ops hub):
+
+| Medusa (storefront — minimal) | ERPNext (operations hub + sub-ledger — full) |
 |---|---|
 | Order, cart, customer, payment status | Sales Order, Sales Invoice, Payment Entry, Credit Note |
 | Checkout line prices, shipping charged, tax lines shown to customer | Purchase Invoice, COGS, carrier cost, write-offs, Journal Entries |
 | Product catalog for display (`manage_inventory = false`) | Stock, bins, FIFO, Shopping Items, Delivery Notes, Returns |
 | Customer notification triggers | Returns triage, claims, finance dashboard, exception queue |
 
-**Sync direction:** **Medusa → ERPNext only** on `order.placed` (and refund events when built). ERPNext **never** pushes Purchase Invoices, carrier costs, Journal Entries, write-offs, or OPEX postings to Medusa.
+Medusa → ERPNext only on `order.placed` (and refund events when built). ERPNext never pushes Purchase Invoices, carrier costs, Journal Entries, write-offs, or OPEX postings to Medusa.
 
-**Conflict precedence** (when values disagree during reconciliation):
-
-| Decision type | Authoritative source | Reason |
-|---|---|---|
-| Revenue, COGS, cash, VAT, write-offs, carrier cost, OPEX | ERPNext | Statutory ledger and operational truth |
-| Storefront order state, payment capture status, customer-facing prices at checkout | Medusa / Postgres | Storefront system of record |
-
-**Payment collection vs ledger posting:** Stripe and PayPal integrate with **Medusa only** — they are Medusa payment providers, not direct ERPNext integrations. The customer pays on the Medusa checkout; Medusa captures payment and stores the breakdown on the order (line totals, shipping, applicable tax lines, payment method, payment reference, total paid). On `order.placed`, the ERPNext subscriber creates the Sales Order, Sales Invoice, and Payment Entry from that synced order payload — the same pattern as Shopify → ERPNext order sync, not a separate PSP webhook into ERPNext.
-
-**Single ledger authority:** ERPNext is the sole accounting system. All revenue, VAT, and customer Payment Entries are posted in ERPNext from the Medusa order sync. No parallel PSP→external ledger connector (e.g. Stripe→Xero) is active or permitted. Stripe/PayPal settlement batches are reconciled in ERPNext against the Payment Entries already posted from order sync.
-
-[CONFIRMED — ERPNext is the sole accounting system. Stripe/PayPal stay with Medusa. Payment Entry amounts come from the Medusa order payload (total paid, shipping, tax lines) via the order.placed subscriber — not from direct PSP webhooks to ERPNext. Owner: Frappe Engineer — verify order.placed subscriber creates Sales Order + Sales Invoice + Payment Entry before B1 goes live]
+[CONFIRMED — ERPNext is the operational sub-ledger. Xero is the statutory ledger. Stripe/PayPal capture via Medusa at checkout; settlement reconciliation via Xero native PSP feeds. ERPNext Payment Entries are created from the Medusa order.placed subscriber payload (not direct PSP webhooks). ERPNext documents sync one-way to Xero on submit. No double-booking: ERPNext posts the accounting entry; Xero reconciles the bank settlement. Owner: Frappe Engineer — verify order.placed subscriber creates Sales Order + Sales Invoice + Payment Entry, and ERPNext → Xero sync is live, before B1 goes live]
 
 ### Finance automation model — agent-first with exception queue
 
@@ -823,7 +836,7 @@ Every item that needs to be bought externally gets its own record (a **Shopping 
 | 6   | The AI Shopper picks up the oldest retailer checkout and begins purchasing, acting through the gated tool layer (never the retailer site directly).                                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Checkout session started                                                            |
 | 7   | The AI Shopper logs into the retailer's website using securely stored credentials held in the gated tool layer.                                                                                                                                                                                                                                                                                                                                                                       | `[AGENT]`                          | AI Shopper → gated tool layer           | Logged in                                                                           |
 | 8   | The AI Shopper adds all required items (combined quantities for all orders needing them) to the Cart.                                                                                                                                                                                                                                                                                                                                                                                 | `[AGENT]`                          | AI Shopper                              | Retailer Cart built                                                                 |
-| 9   | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. The spend cap is **£500** per retailer checkout session. **Deputy approver (PROPOSED):** Ops Lead if operations manager unavailable. **Timeout (PROPOSED):** if no approval within **4 hours**, escalate to Mike (CEO); if still no response, checkout is **denied** (not auto-approved). This value is set in the operations hub retailer settings. [CONFIRMED — spend cap £500 PROPOSED pending Mike sign-off — Owner: Frappe Engineer — Sprint 1, Week 1] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
+| 9   | **Spend-cap check (human-in-the-loop):** if the retailer Cart total exceeds the configured per-checkout spend cap, the AI Shopper pauses and the operations manager must approve before checkout continues. The spend cap is **£200** per retailer checkout session. (Starting value confirmed by CEO June 2026 — will be reviewed upward once AI Shopper checkout accuracy is validated in production) Cart **> £200** → checkout pauses. **Deputy approver (PROPOSED):** Ops Lead if operations manager unavailable. **Timeout (PROPOSED):** if no approval within **4 hours**, escalate to Mike (CEO); if still no response, checkout is **denied** (not auto-approved). This value is set in the operations hub retailer settings. [CONFIRMED — spend cap £200 — Owner: Frappe Engineer — Sprint 1, Week 1] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
 | 10  | The AI Shopper checks out: the McGrocer delivery address is pre-saved, payment is pre-saved, and the earliest available delivery slot to the warehouse is selected.                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Order placed with retailer                                                          |
 | 11  | The AI Shopper records, against each Shopping Item, the retailer's order confirmation number, the expected delivery date, and the actual purchase cost. The Shopping Items are marked **Purchased**. Every input and response is written to the decision log.                                                                                                                                                                                                                         | `[AGENT]`                          | AI Shopper → operations hub             | Retailer order ref + expected delivery + cost; items **Purchased**; decision logged |
 | 12  | Once all Shopping Items for an order are purchased, the order stays at status **Shopping** (everything is ordered and now in transit to the warehouse). Operations and warehouse are notified automatically.                                                                                                                                                                                                                                                                          | `[AUTO]`                           | Operations hub → customer notifications | Status confirmed **Shopping**; Ops + warehouse notified                             |
@@ -916,9 +929,86 @@ Each item appears as a card with:
 1. Opens the Shopping List app on their phone
 2. Sees items that were escalated to in-store: **(1) OOS-escalated items** — the AI Shopper could not buy at any online retailer; **(2) Kendamil slot-escalated items** — online delivery slot to warehouse exceeds the deadline; **(3) Ops override items** — source changed manually. All are worked the same way in the app.
 3. For each item: searches up to 3 physical stores
-4. **Item found**: enters the quantity bought in the qty field and taps **Confirm Purchase**. The operations hub then records the shopped quantity, moves the Shopping Item from Pending → Shopped (or Partially Shopped if partial), and logs the purchase cost against the item.
+4. **Item found — verify with barcode scan before confirming:**
+
+The Shopping List app shows the product image, name, and exact variant required (e.g. Heinz Baked Beans 415g — NOT 200g). Before entering quantity, the Shopper uses the **in-app barcode scanner** to confirm the physical item matches the Shopping Item:
+
+**How it works:**
+1. Shopper taps the **Scan to verify** button on the Shopping Item card
+2. The app activates the phone camera as a barcode scanner (uses BarcodeDetector API on Android/Chrome; ZXing-js fallback for iOS and older browsers — no app install required, runs in the browser PWA)
+3. Shopper points camera at the product barcode on the shelf or packaging
+4. The app looks up the scanned barcode in the ERPNext Item master and returns the product name, variant, and description **within 1 second**
+5. **Match confirmed:** app shows green confirmation — 'This is the right item' — Shopper enters quantity and taps Confirm Purchase
+6. **Mismatch detected:** app shows red warning — 'Wrong item — this is [scanned product name]. You need [required product name]' — Shopper puts it back and keeps looking
+7. **Barcode not in ERPNext:** the app automatically searches external product databases in sequence — Open Food Facts first (food/FMCG), then Barcode Lookup (all categories). If found externally: the app shows the product name, brand, and image — Shopper confirms 'Yes this is the right item' or 'No, wrong item'. On YES: the product data is saved to the ERPNext Item master automatically (catalog enrichment — no manual ops work needed). If not found anywhere: the app shows the original Shopping Item product image and asks the Shopper for manual visual confirmation. All outcomes are logged in the Decision Log.
+
+The scan is **optional, not a hard gate** — if the Shopper cannot scan (packaging damaged, no camera access), they can skip scan and confirm manually. The skip is logged so the warehouse team can verify at receiving.
+
+**Why this matters:** without scanning, a Shopper can accidentally buy the wrong size or variant (e.g. 200g instead of 415g, unflavoured instead of original). The barcode scan catches mismatches in-store before the item is purchased — eliminating a class of substitution error that currently only surfaces at warehouse receiving.
+
 5. **Item not found at any store**: taps **Mark as N/A**, leaves qty at 0, and adds a comment explaining what was tried (e.g. "Tried Tesco, Boots, Superdrug — OOS everywhere"). The Shopping Item is then **Cancelled**.
 6. After each N/A is logged, the operations hub automatically checks whether the rest of the order can proceed.
+
+#### Barcode scanner — technical spec
+
+**Implementation:** Progressive Web App (PWA) — no native app install required. Runs in the browser on the Shopper's phone.
+
+| Scenario | API / library |
+|---|---|
+| Android Chrome (modern) | BarcodeDetector API — native browser, zero dependency |
+| iOS Safari / older Android | ZXing-js — JavaScript barcode library, loaded on demand |
+| Offline / poor signal | Barcodes are scanned locally on-device; only the lookup call needs network |
+
+**Barcode formats supported:**
+EAN-13, EAN-8, UPC-A, UPC-E, Code 128, QR code — covers all UK retail products.
+
+**Lookup flow — three-tier cascade:**
+
+The app runs lookups in sequence, stopping at the first successful result:
+
+**Tier 1 — ERPNext Item master (< 1 second)**
+`GET /api/resource/Item?filters=[['barcode', '=', '{scanned_code}']]`
+Returns: item_code, item_name, description, item_image, uom
+→ If found: compare against Shopping Item product_code → show match/mismatch result
+
+**Tier 2 — Open Food Facts (1–2 seconds)**
+Called only if Tier 1 returns no result.
+`GET https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
+Returns: product_name, brands, quantity, image_url, categories
+Free · open source · 3M+ products · strong UK food/FMCG coverage
+→ If found: show product name, brand, and image to Shopper — 'Is this the right item?'
+  YES → auto-save barcode + product details to ERPNext Item master (catalog enrichment) + proceed to confirm purchase
+  NO → show 'Wrong item — keep looking'
+
+**Tier 3 — Barcode Lookup API (1–2 seconds)**
+Called only if Tier 2 returns no result.
+`GET https://api.barcodelookup.com/v3/products?barcode={barcode}&formatted=y&key={API_KEY}`
+Returns: product_name, brand, description, image, category
+Covers 900M+ products including non-food
+→ Same YES/NO confirmation flow as Tier 2
+
+**Tier 4 — Manual visual confirmation**
+Called only if all three tiers return nothing.
+App shows the product image and description from the Shopping Item itself and prompts:
+'We could not identify this barcode. Does the item in your hand match this image?'
+[Shopping Item product image displayed]
+YES → purchase confirmed, logged as 'manually verified — barcode unknown' for catalog enrichment by ops team
+NO → 'Wrong item — keep looking'
+
+**Auto-catalog enrichment:**
+When Tier 2 or Tier 3 returns a result and the Shopper confirms YES, the app automatically creates or updates the ERPNext Item record:
+- Saves the barcode to the item's barcode table (`item_barcode` child table)
+- Saves product_name, brand, description, and image_url to the Item master fields
+- Flags the item as 'enriched from external scan' for ops team review
+- Logs the enrichment event in the Decision Log (barcode · source API · product name · Shopper · timestamp)
+
+This means every in-store scan of an unknown product automatically improves the ERPNext catalog — zero manual data entry required from the ops team for items the Shoppers encounter in the field.
+
+**Frappe Engineer build note:**
+Add a `Scan to verify` button to the Shopping Item card in the Shopping List app. On tap: activate camera via BarcodeDetector or ZXing-js, call ERPNext Item lookup API with scanned barcode, display match/mismatch result. If barcode not found in ERPNext: prompt to save new barcode (same flow as M03 receiving app new-barcode path — reuse the same API endpoint). Log scan result (match/mismatch/skipped) on the Shopping Item for quality tracking.
+[BUILD TASK — BC3-SCAN — Add barcode verification scan to Shopping List app Confirm Purchase flow. Three-tier lookup cascade: (1) ERPNext Item master, (2) Open Food Facts API, (3) Barcode Lookup API, (4) manual visual fallback. Auto-catalog enrichment on external API match confirmed by Shopper. All scan outcomes logged in Decision Log. API keys for Barcode Lookup stored in HashiCorp Vault (same as retailer credentials). Open Food Facts requires no API key.
+Owner: Frappe Engineer + AI Developer.
+Deadline: Sprint 1, Week 1 — same sprint as BC3. Build alongside BC3 Confirm Purchase UI.]
 
 #### Bulk actions (for selected items)
 
@@ -2199,7 +2289,9 @@ This is the gate for Phase 1 go-live. Nothing goes live until every item below i
 | Stock Write-off on expiry removal job confirmed (Frappe Engineer) | [ ] |
 | FIFO costing method enabled in ERPNext (Finance Lead confirms) | [ ] |
 | Output VAT table confirmed by Finance Lead and loaded into Compliance Engine | [ ] |
-| Single ledger authority confirmed — ERPNext only; Stripe/PayPal with Medusa; Payment Entries from order.placed sync, no PSP→external ledger connector (Finance Lead) | [ ] |
+| HMRC MTD VAT connection confirmed in Xero (Finance Lead) | [ ] |
+| ERPNext → Xero sync configured and tested — all document types syncing (Sales Invoice, Purchase Invoice, Payment Entry, Credit Note, Journal Entry) (Finance Lead + Frappe Engineer) | [ ] |
+| Xero bank feeds live — Stripe, PayPal, and UK bank account connected to Xero via open banking / native PSP integration (Finance Lead) | [ ] |
 | ERPNext chart of accounts confirmed and all income/expense accounts mapped (Finance Lead) | [ ] |
 | Shopping Item `actual_purchase_price` field created (BC2) | [ ] |
 | Shopping List app price capture at confirm_purchases (BC3) | [ ] |
@@ -2312,7 +2404,7 @@ A 15-minute standing meeting, weekly. The operations manager reviews one operati
 
 ### Objective
 
-Every order-path money event posts automatically to ERPNext. Humans touch finance only on the **exception queue** or for **non-order OPEX** (email-assisted drafts + manual gap-fill). ERPNext is the sole accounting system — no Xero, no parallel PSP→external ledger connector.
+Every order-path money event posts automatically to ERPNext. Humans touch finance only on the **exception queue** or for **non-order OPEX** (email-assisted drafts + manual gap-fill). ERPNext is the operational sub-ledger — all posting documents live here. Xero is the statutory ledger — receives a one-directional sync from ERPNext on every submitted document. No parallel PSP→external ledger connector that bypasses ERPNext. The sync path is: ERPNext submit → Xero (not PSP → Xero directly).
 
 ### Order-triggered posting map
 
@@ -2332,9 +2424,9 @@ Every order-path money event posts automatically to ERPNext. Humans touch financ
 
 ### Medusa → ERPNext payment sync
 
-Stripe and PayPal integrate with **Medusa only**. On `order.placed`, the subscriber creates Sales Order, Sales Invoice, and Payment Entry from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, total paid. **No direct PSP webhook to ERPNext.**
+Stripe and PayPal integrate with **Medusa only**. On `order.placed`, the subscriber creates Sales Order, Sales Invoice, and Payment Entry from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, total paid. **No direct PSP webhook to ERPNext.** Stripe and PayPal do connect to Xero directly via Xero's native PSP integration — but only for bank reconciliation of actual settlements, not for accounting entries. The accounting entries (Sales Invoice, Payment Entry) are posted in ERPNext from the order.placed payload and then synced to Xero.
 
-Medusa never receives Purchase Invoices, carrier costs, Journal Entries, or write-offs — one-way sync only (see [Two systems of record](#two-systems-of-record--medusa-vs-erpnext)).
+Medusa never receives Purchase Invoices, carrier costs, Journal Entries, or write-offs — one-way sync only (see [Three systems of record](#three-systems-of-record--conflict-precedence)).
 
 ### Finance exception queue
 
@@ -2354,10 +2446,20 @@ Rent, payroll, utilities, insurance, accounting fees, and other **non-order** ex
 
 | Step | Owner | ERPNext document |
 |---|---|---|
+| **Phase 1 (before B-NEW-02 is live):** All non-order OPEX posted manually | Finance Lead / admin | Manual Purchase Invoice or Journal Entry in ERPNext for every rent, utility, SaaS, payroll-related bill |
 | Bill email arrives in finance inbox | Email Monitor (B-NEW-02) | Draft Purchase Invoice or Journal Entry |
 | Finance reviews draft and submits | Finance/admin | Posted PI / JE |
 | Email missed, wrong, or incomplete | Finance/admin | Manual PI / JE / Payment Entry for the gap |
 | Pay the supplier | Finance/admin | Payment Entry |
+
+**Phase 1 manual OPEX SOP (before B-NEW-02):**
+Until the Email Monitor finance inbox extension is built (Phase 2 Sprint 8), Finance Lead posts all non-order OPEX manually in ERPNext:
+1. Bill received → Finance creates Purchase Invoice in ERPNext (supplier, amount, account code, date)
+2. ERPNext syncs PI to Xero automatically on submit
+3. Finance pays in Xero or via bank — bank feed in Xero reconciles automatically
+4. No double-entry — ERPNext is source of truth; Xero receives and reconciles
+
+This is the same process McGrocer uses today for Xero entries — the only change is that ERPNext becomes the entry point (not Xero directly) so the sub-ledger stays complete.
 
 **Order COGS is not in this path.** Tesco/Sainsbury's purchase prices for customer orders are captured by the AI Shopper at checkout (BC4) or the in-store app (BC3) — not parsed from retailer emails.
 
@@ -2368,8 +2470,8 @@ See [mike-review-brief.md](../mcgrocer-dev-docs/mike-review-brief.md).
 | Cycle | Owner | ERPNext tool |
 |---|---|---|
 | Daily | Finance Lead | Review exception queue + digest metrics (M12) |
-| Weekly | Finance Lead | Bank Reconciliation — match Stripe/PayPal settlements to Payment Entries |
-| Monthly | Finance Lead | MTD VAT return from ERPNext; P&L review |
+| Weekly | Finance Lead | Xero bank reconciliation — Stripe/PayPal open banking feed matches settlements to Payment Entries synced from ERPNext. Variances investigated and posted as FX gain/loss or adjustment Journal Entries in ERPNext (then re-synced to Xero). |
+| Monthly | Finance Lead | MTD VAT return filed via Xero to HMRC (Xero is HMRC-connected); P&L review in Xero; verify ERPNext → Xero sync is complete with no unsynced documents. |
 | Month-end | Finance Lead | Close period; AR/AP ageing; slow-mover write-offs (M10) |
 
 ### M13 flowchart
@@ -2672,8 +2774,14 @@ Medusa emits `order.placed` on checkout completion. A custom subscriber in `/src
 **No official ERPNext integration exists in Medusa docs.** The Odoo ERP recipe is the reference pattern. McGrocer's custom module lives at:
 /home/frappe/mcgrocer-medusa/apps/backend/src/modules/erpnext/
 
-**ARCH-AUTO-001 interface register update:** the L2 → Finance interface row originally read 'ERPNext → external ledger'. This is superseded. The correct interface is:
-  L2 → Finance | ERPNext internal ledger | Sales Invoice / Purchase Invoice / Credit Note / Payment Entry on doctype submit | ERPNext is both sub-ledger and statutory system. No external accounting connector.
+**ARCH-AUTO-001 interface register update — confirmed V3.4:**
+
+| Interface | Producer → Consumer | Mechanism | Notes |
+|---|---|---|---|
+| L2 → Finance sub-ledger | ERPNext operations → ERPNext accounts | Sales Invoice / Purchase Invoice / Payment Entry / Credit Note / Journal Entry on doctype submit | All per-order money events post here first |
+| L2 → Xero (statutory) | ERPNext → Xero | One-way sync on every ERPNext doctype submit | Xero never writes back |
+| L4 → Xero (bank) | Stripe/PayPal → Xero | Xero native PSP integration — settlement reconciliation only | Not an accounting entry — reconciliation only |
+| L4 → ERPNext | Medusa order.placed → ERPNext subscriber | REST API call creates SO + SI + PE | PSPs do not call ERPNext directly |
 
 ---
 
@@ -2693,5 +2801,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v3.2 — 2026-06-09*
+*McGrocer 2.0 — Automated Operations Flow — v3.6 — 2026-06-09*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
