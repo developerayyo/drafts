@@ -1,6 +1,6 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 3.8.2 — 2026-06-09** · [Changelog](#document-changelog)
+**Version 3.8.3 — 2026-06-11** · [Changelog](#document-changelog)
 
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
@@ -457,7 +457,9 @@ Runs immediately after payment, before the order is **Confirmed**:
 3. DG / alcohol / OTC medication / food / electrical rules satisfied?
 4. Payment confirmed and valid?
 5. Fraud or duplicate-order check clear?
-  → Fraud score threshold: if the Order Review Agent (AI-001) returns a confidence score below 0.70, the order is automatically placed on HOLD and the Operations manager is alerted via Slack with a direct ERPNext link. Score ≥ 0.70 passes automatically. This threshold (0.70) matches the SOW ARCH-001 agent pipeline confidence gate and is confirmed as the production value. The Frappe Engineer configures this in the Order Review Agent settings before go-live. [CONFIRMED — 0.70 per SOW ARCH-001 §5. Owner: Frappe Engineer — Deadline: Sprint 1]
+  → **Phase 1 (no Order Review Agent live):** deterministic rules only — (a) Shopify Fraud Analysis **Medium or High** → HOLD; (b) Stripe Radar **elevated risk** → HOLD; (c) ERPNext duplicate-order check (same customer email + identical line items within 24 hours) → HOLD; (d) order value **>£500** on first purchase from new customer → HOLD. Any HOLD → Operations manager alerted via Slack with ERPNext link; **2-hour resolution SLA** (same as compliance hold). Pass = all rules clear.
+  → **Phase 2 (Order Review Agent live):** if the Order Review Agent (AI-001) returns a confidence score below **0.70**, order is HOLD (same alert path). Score ≥ 0.70 passes. Threshold matches SOW ARCH-001 §5. [CONFIRMED — Owner: Frappe Engineer — configure Phase 1 rules in order.placed subscriber Sprint 1; agent threshold before Phase 2 cutover]
+  → **Agent outage fallback (Phase 2):** if the Order Review Agent is unavailable for **>5 minutes**, the order.placed subscriber automatically degrades to the Phase 1 rule set above until the agent recovers. No orders pass on fraud check failure — circuit breaker never bypasses HOLD. [BUILD TASK — M01-FRAUD-FALLBACK — Owner: Frappe Engineer — Sprint 1]
 6. Sanctions screening clear?
 7. Does the shipping charge cover the estimated carrier cost?
 
@@ -549,7 +551,9 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 | Timing                                      | Value                                               | Where it applies                                  |
 | ------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- |
 | Compliance **On hold** review window        | 2 hours                                             | M01 — operations manager/CS resolves a held order |
-| Fraud score HOLD threshold                  | 0.70 (below = HOLD, ≥ 0.70 = pass)                  | M01 — Order Review Agent                          |
+| Fraud HOLD — Phase 1 rules                  | Shopify Medium/High · Stripe elevated · duplicate 24h · >£500 new customer | M01 — order.placed subscriber (no agent) |
+| Fraud score HOLD threshold (Phase 2)        | 0.70 (below = HOLD, ≥ 0.70 = pass)                  | M01 — Order Review Agent                          |
+| Order Review Agent outage degrade           | >5 min unavailable → Phase 1 rules until recovery   | M01 — circuit breaker                             |
 | Order fulfilment commitment                 | 1–3 business days                                   | End-to-end SLA (M12 SLA tracker)                  |
 | Shopping Item stuck alert                   | Pending > 24 hours                                  | M12 alert to operations manager                   |
 | Customer no-reply on OOS / substitute offer | 48 hours → item dropped, partial refund             | M02 / M07                                         |
@@ -1509,6 +1513,8 @@ Status **Awaiting shipment**; the pre-dispatch checklist from M05 passed.
 **Phase 1 transition note:** the Phase 1 manual ShipStation booking path is functionally identical to the current manual flow. The operations hub Delivery Note DocType must support manual entry of: tracking number, carrier name, carrier service, label cost, and (for US food) FDA Prior Notice confirmation number. These fields must be built by the Frappe Engineer in Sprint 1 regardless of Phase 2 automation.
 [BUILD TASK — Owner: Frappe Engineer — Deadline: Sprint 1]
 
+**Phase 1 FDA Prior Notice SOP (M06-b):** For US food shipments in Phase 1, the shipping officer: (1) opens the FDA PNSI portal at [https://www.access.fda.gov/](https://www.access.fda.gov/); (2) files Prior Notice using data from the Delivery Note (shipper, consignee, product, lot, quantity); (3) enters the FDA confirmation number on the Delivery Note in the operations hub; (4) only then creates the ShipStation label. If PNSI is down or filing fails: escalate to Operations manager; **4-hour SLA** from first attempt; order stays **Awaiting shipment** — no label without confirmation number. Ops Lead maintains a one-page printed SOP at the dispatch station. [CONFIRMED — Owner: Ops Lead (SOP) + Frappe Engineer (Delivery Note field) — before M06 go-live]
+
 ### What is produced
 
 A booked shipment with a carrier, a tracking number recorded in the operations hub, a tracking email sent to the customer, and a signed **Delivery Manifest** (the collection sheet the driver signs at handover).
@@ -1531,7 +1537,7 @@ A booked shipment with a carrier, a tracking number recorded in the operations h
 | 11  | **Label created:** ShipStation API when step 8–9 succeeded; otherwise label/AWB from the manual channel. This is the only dispatch booking step in the flow.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `[AGENT]` or `[HUMAN]` Ops                   | ShipStation or alternate channel           | Carrier label / AWB produced                            |
 | 11a | **Label surfaced in operations hub:** The ShipStation API returns a label PDF URL (stored as `shipstation_label_url` on the Delivery Note DocType). The Frappe Engineer must add a 'Print label' button to the Delivery Note form view that opens this URL and sends it to the connected label printer. The label printer (Zebra ZPL or equivalent) must be configured at the packing station and connected to the ERPNext instance. The warehouse associate clicks 'Print label', the label prints, and the associate confirms print by ticking 'Label printed' on the Delivery Note. [BUILD TASK — Owner: Frappe Engineer — Deadline: Sprint 1] | `[HUMAN]` warehouse + `[AUTO]` Frappe config | Operations hub                             | Label printed confirmed on Delivery Note                |
 | 12  | The tracking number, carrier, and label ID are saved on the fulfillment record. Status: **Shipped**. The **fulfillment notification** (the "your order has shipped" tracking email — tracking number, link, carrier) is sent to the customer.                                                                                                                                                                                                                                                                                                                                                                                                     | `[AUTO]`                                     | Operations hub → customer notifications    | Tracking saved; status **Shipped**; tracking email sent |
-| 13  | A **customs outcome** field is opened on the order with status **Pending**. Customer support updates it when they learn what happened at customs (cleared, held, seized, etc.). This data feeds anomaly detection in M12.                                                                                                                                                                                                                                                                                                                                                                                                                         | `[AUTO]`                                     | Operations hub                             | Customs outcome tracking started (Pending)              |
+| 13  | A **customs outcome** field is opened on the order with status **Pending**. Customer support updates it when they learn what happened at customs (cleared, held, seized, etc.). This data feeds anomaly detection in M12. When status = **Held**: CS must contact the customer within **24 hours** with DDU guidance (customer is Importer of Record). If no update within 24h, M12 alert fires to CS lead. [CONFIRMED — M06-d — Owner: Ops Lead (CS briefing) — before Phase 1 go-live]                                                                                                                                                      | `[AUTO]` + `[HUMAN]` CS within 24h           | Operations hub                             | Customs outcome tracking started (Pending)              |
 | 14  | Warehouse associate applies the carrier label to the parcel and scans it to confirm the tracking number is registered in the operations hub.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `[HUMAN]` apply + scan                       | Operations hub                             | Label on parcel; tracking confirmed                     |
 | 15  | **Pre-dispatch scan QC:** scan every label in dispatch staging. The total count must match the number of orders in **Shipped** status ready for collection. If any parcel is missing, find it before the courier arrives.                                                                                                                                                                                                                                                                                                                                                                                                                         | `[HUMAN]`                                    | Operations hub                             | Parcel count verified vs manifest                       |
 | 16  | Parcels are staged in the Dispatch zone, grouped by carrier and service type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `[HUMAN]` physical                           | Physical                                   | —                                                       |
@@ -1569,6 +1575,19 @@ These two values must not be conflated. The landed-cost display shows both to th
 | Cheaper outside ShipStation               | Ops may book direct and log savings vs quoted ShipStation rate                                                                          | `[HUMAN]` Ops                        | DHL direct, World Options (current practice)                            |
 | Sanctions match at pre-label check        | Blocked — approve or cancel                                                                                                             | `[HUMAN]` Ops                        | —                                                                       |
 
+### UPS Express Saver coverage validation (M06-c)
+
+UPS Express Saver is the default carrier in the rules table above. Before M06 go-live, the **Operations Lead** runs a ShipStation rate-quote test and signs off a validation matrix:
+
+| Matrix segment | Sample size | Pass criterion |
+|---|---|---|
+| UK mainland | 20 postcodes (mix urban, rural, HS/ZE/KW/IV/BT remote) | UPS Express Saver rate returned |
+| International | Top 20 destinations by order volume (last 12 months) | UPS Express Saver rate returned |
+| DG routes | All DG-flagged test parcels in matrix | DG-compliant UPS or documented alternate |
+
+**Pass:** ≥95% of matrix cells return a valid UPS Express Saver (or DG-equivalent) rate. **Fail cells:** document fallback carrier (next cheapest valid ShipStation rate per rules table) in the matrix spreadsheet; no go-live until matrix signed off.
+
+[BUILD TASK — M06-UPS-MATRIX — Ops Lead runs matrix; Frappe Engineer stores signed PDF/link on M12 go-live checklist. Owner: Ops Lead — Deadline: before M06 go-live]
 
 ### M06 Flowchart
 
@@ -2104,27 +2123,15 @@ Every destination country has a de minimis threshold — the order value below w
 
 De minimis data is stored in the operations hub for every destination McGrocer ships to. At M01, the compliance service uses this data when assessing orders. At M06, the commercial invoice always states the actual sale price — McGrocer never under-declares values on customs documents.
 
-> **De minimis data flow — shared with Chisom [PLACEHOLDER]:**
-> Peter stores de minimis thresholds in the operations hub
-> (ERPNext) per destination country. Chisom displays the
-> landed cost estimate at checkout via the Compliance Engine.
-> The data flow between these two systems must be confirmed
-> before build:
->
-> **Option A:** ERPNext de minimis data feeds the Compliance
-> Engine Tier 1 cache directly — single source of truth, no
-> inconsistency risk. Peter builds the ERPNext → Compliance
-> Engine Tier 1 cache data feed.
->
-> **Option B:** Compliance Engine Tier 1 cache maintains its
-> own thresholds. ERPNext de minimis table and Compliance
-> Engine cache must be kept in sync — this is the same
-> consistency risk.
->
-> [ACTION — Owner: Peter + Chisom — confirm which option in
-> joint session. Deadline: before M2 W1. Until confirmed,
-> assume Option B (independent) as the default, but flag the
-> consistency risk to Aisha.]
+> **De minimis data flow — confirmed (M11-b):**
+> **Option A** is the production architecture. Peter stores de
+> minimis thresholds in ERPNext (single source of truth). The
+> ERPNext de minimis table feeds the Compliance Engine Tier 1
+> cache on a scheduled sync (daily + on-demand when Finance
+> updates a threshold). Chisom reads landed-cost estimates from
+> the Compliance Engine API at checkout — not a separate copy.
+> [CONFIRMED — Owner: Peter (ERPNext → CE feed, Sprint 2) +
+> Chisom (checkout display) — before M2 W1]
 
 ### Output VAT — what McGrocer collects and remits
 
@@ -2318,7 +2325,11 @@ This is the gate for Phase 1 go-live. Nothing goes live until every item below i
 | VAT pre-go-live gate live in order.placed subscriber (Frappe Engineer) | [ ] |
 | Finance deputy named for exception queue + manual OPEX (Finance Lead) | [ ] |
 | Substitute price threshold configured (Ops Lead confirms %) | [ ] |
-| Fraud score threshold (0.70) configured on Order Review Agent | [ ] |
+| Phase 1 fraud rules live in order.placed subscriber (Shopify/Stripe/duplicate/>£500) — M01-FRAUD-FALLBACK | [ ] |
+| Phase 2 only: Fraud score threshold (0.70) on Order Review Agent + outage circuit breaker tested | [ ] |
+| UPS Express Saver coverage matrix run and signed off (≥95% pass) — M06-UPS-MATRIX | [ ] |
+| FDA Prior Notice Phase 1 SOP printed at dispatch station (M06-b) | [ ] |
+| De minimis ERPNext → Compliance Engine feed configured (Option A) | [ ] |
 | HS codes assigned to top 100 SKUs by order volume in ERPNext | [ ] |
 | IATA/IMDG DG classification assigned to all DG-flagged SKUs | [ ] |
 | Returns bin created in ERPNext; permission gate blocking transfer before triage confirmed | [ ] |
@@ -2852,6 +2863,7 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 | Version | Date | Summary |
 |---|---|---|
+| **3.8.3** | 2026-06-11 | Close Aisha OPEN gaps: M01-e Phase 1 fraud fallback + agent outage circuit breaker; M06-c UPS Express Saver validation matrix; M06-b FDA Phase 1 SOP; M06-d customs CS 24h SLA; M11-b de minimis Option A confirmed |
 | **3.8.2** | 2026-06-09 | STRESS-OPS agreed items closed in doc: whole-cart £200 spend cap; Phase 1 margin honesty; VAT gate B1-VAT-GATE; BC6/90%/barcode SLAs; ST-F03/04/07/08/12 build tasks; digest metrics |
 | **3.8.1** | 2026-06-09 | (Superseded by 3.8.2 — per-customer cap reverted to whole-cart per CEO) |
 | **3.8** | 2026-06-09 | TaxJar architecture (Phase 1 Shopify → ERPNext; Phase 2 Medusa Tax module); B1-TAX; Systems + money flow tables |
@@ -2863,5 +2875,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v3.8.2 — 2026-06-09*
+*McGrocer 2.0 — Automated Operations Flow — v3.8.3 — 2026-06-11*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
