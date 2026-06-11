@@ -1,6 +1,6 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 3.8.4 — 2026-06-11** · [Changelog](#document-changelog)
+**Version 3.8.5 — 2026-06-11** · [Changelog](#document-changelog)
 
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
@@ -2828,10 +2828,28 @@ Medusa emits `order.placed` on checkout completion. A custom subscriber in `/src
 - Medusa Payment module (Stripe/PayPal) captures payment at checkout — PSPs integrate with Medusa, not ERPNext. The order.placed subscriber creates Sales Order, Sales Invoice, and Payment Entry in ERPNext from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, and total paid.
 - Actual checkout price from Medusa must flow to ERPNext Sales Order line rates and to Shopping Item `actual_purchase_price` — never the ERPNext Item catalog price.
 
-**Stripe authorize-then-capture — OPEN (Aisha stress test):**
-Current spec: Medusa Payment module **captures at checkout** before M01 compliance.
-Question: does Medusa v2 Stripe provider support **authorize → external capture trigger** after compliance pass without custom payment-session work?
-[INVESTIGATION — Owner: Peter + Chisom — document finding before Medusa cutover. Until resolved, keep capture-at-checkout; no flow change.]
+**Stripe authorize-then-capture — investigated (Aisha stress test, June 2026):**
+
+**Short answer:** Medusa v2 Stripe provider **supports manual capture**, but **not cleanly** for McGrocer's model (compliance in ERPNext **after** `order.placed`). **Custom integration work is required.** **Phase 2 go-live recommendation: keep capture-at-checkout** (current spec); refund on compliance fail.
+
+| Layer | What Medusa provides OOTB | What McGrocer needs |
+|---|---|---|
+| **Authorize at checkout** | Yes — set `capture: false` in `@medusajs/medusa/payment-stripe` options → Stripe `capture_method: manual` → PaymentIntent status `requires_capture` (funds held, not captured) | Configure in `medusa-config.ts` before cutover |
+| **External capture trigger** | Yes — `capturePaymentWorkflow` (Admin API + core workflow) captures an authorized payment programmatically | ERPNext must call Medusa **after M01 compliance pass** — not built today |
+| **Compliance gate before capture** | No — `completeCartWorkflow` creates the order and emits `order.placed` **before** `authorizePaymentSessionStep`; compliance runs in ERPNext subscriber, not in Medusa's `beforePaymentAuthorization` hook | Bidirectional ERPNext ↔ Medusa: capture on pass, cancel/refund on fail |
+| **Ledger alignment** | Medusa order + payment records exist at authorize; capture is a separate step | ERPNext Payment Entry timing must match capture moment if using manual capture — subscriber redesign |
+
+**How it would work if built (optional Phase 2+ — not default go-live):**
+
+1. Customer pays → Stripe authorizes (manual capture) → `POST /store/carts/:id/complete` → order created → `order.placed` → ERPNext subscriber runs M01 compliance.
+2. **Pass** → subscriber calls Medusa Admin `capturePaymentWorkflow` for the order's payment → then posts Sales Invoice + Payment Entry in ERPNext.
+3. **Fail / HOLD** → subscriber calls Medusa cancel/refund workflow → no revenue booked; customer not charged.
+
+[BUILD TASK — B1-CAPTURE-MEDUSA — Optional Phase 2+: ERPNext subscriber calls Medusa capture API after M01 pass; cancel on fail. Owner: Frappe Engineer + Chisom — only if Product opts out of capture-at-checkout.]
+
+**Why not default:** capture-at-checkout is simpler, matches current Shopify behaviour, and compliance fail is handled by refund (B11). Manual capture adds ERPNext→Medusa API coupling and Payment Entry timing complexity for marginal benefit unless Finance requires no capture before compliance pass.
+
+**Investigation refs:** Medusa `@medusajs/medusa/payment-stripe` (`capture: false` → manual); `capturePaymentWorkflow`; `completeCartWorkflow` (`order.placed` then `authorizePaymentSessionStep`). Medusa docs: [Capture Payment](https://docs.medusajs.com/user-guide/orders/payments) (manual capture in Admin when auto-capture off).
 
 **Port configuration (dev-bench):**
 - Medusa backend: port 7000
@@ -2872,7 +2890,8 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 | Version | Date | Summary |
 |---|---|---|
-| **3.8.4** | 2026-06-11 | Aisha final call: £75 spend cap per vendor cart; TaxJar confirmed (not Zonos); US de minimis $800 suspended + TaxJar/duty split; Stripe authorize-capture OPEN investigation |
+| **3.8.5** | 2026-06-11 | Stripe authorize-then-capture investigated: manual capture supported but needs ERPNext→Medusa custom work; keep capture-at-checkout for Phase 2 go-live |
+| **3.8.4** | 2026-06-11 | Aisha final call: £75 spend cap per vendor cart; TaxJar confirmed (not Zonos); US de minimis $800 suspended + TaxJar/duty split |
 | **3.8.3** | 2026-06-11 | Close Aisha OPEN gaps: M01-e Phase 1 fraud fallback + agent outage circuit breaker; M06-c UPS Express Saver validation matrix; M06-b FDA Phase 1 SOP; M06-d customs CS 24h SLA; M11-b de minimis Option A confirmed |
 | **3.8.2** | 2026-06-09 | STRESS-OPS agreed items closed in doc: whole-cart £200 spend cap; Phase 1 margin honesty; VAT gate B1-VAT-GATE; BC6/90%/barcode SLAs; ST-F03/04/07/08/12 build tasks; digest metrics |
 | **3.8.1** | 2026-06-09 | (Superseded by 3.8.2 — per-customer cap reverted to whole-cart per CEO) |
@@ -2885,5 +2904,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v3.8.4 — 2026-06-11*
+*McGrocer 2.0 — Automated Operations Flow — v3.8.5 — 2026-06-11*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
