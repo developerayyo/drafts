@@ -1,6 +1,6 @@
 # McGrocer 2.0 — Automated Operations Flow
 
-**Version 3.8.3 — 2026-06-11** · [Changelog](#document-changelog)
+**Version 3.8.4 — 2026-06-11** · [Changelog](#document-changelog)
 
 **Audience:** Everyone who reads this is covered — CEO, CTO, Head of Engineering (HOE), Product Manager, Frappe Engineers, AI Engineers, SEO, Product Designer, Operations, Warehouse, Customer Support, Finance, and Management. It is written so a business reader and an engineer can both read the same step and understand exactly what happens.
 
@@ -573,7 +573,7 @@ Every time window mentioned anywhere in this document, in one place. No timing i
 | Repeat-incident pattern flag                | > 2 incidents/month (same SKU, route, or carrier)   | M09 / M12                                         |
 | Write-off threshold                         | £30                                                 | M08 return triage — auto write-off vs quarantine  |
 | Auto-refund limit                           | £150                                                | M08 — auto-issue vs CS confirmation required      |
-| AI Shopper spend cap approval               | 4 hours (deputy: Ops Lead; then CEO)                | M02 — grouped retailer cart total exceeds £200    |
+| AI Shopper spend cap approval               | 4 hours (deputy: Ops Lead; then CEO)                | M02 — grouped retailer cart total exceeds £75 per vendor     |
 | BC6 zero-price exception resolution         | 4 hours from receipt scan                           | M03 — Finance Lead; escalate HOE if unresolved  |
 | 90% receipt threshold approval            | 2 hours from threshold reached                      | M03 — Operations manager                          |
 | Barcode conflict resolution               | 4 hours (Frappe Engineer on-call in operating hours) | M03 — Ops override path if engineer unavailable  |
@@ -690,7 +690,7 @@ These messages appear on the Cart and checkout pages today. McGrocer 2.0 **autom
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | **Destination**         | Ships to 150+ countries; import rules vary for food, baby, personal care                                          | Order-entry compliance check (M01)                                                          |
 | **Import requirements** | Customer confirms items are permitted for personal import; will comply with local laws; is **Importer of Record** | M01 compliance + DDU (Delivered Duty Unpaid) on invoice and emails                          |
-| **Duties & taxes**      | Import duties, VAT/GST, customs fees **not** in order total; payable at destination                               | Landed-cost estimate at checkout (Compliance Engine Tier 1 — deterministic, <50ms); DDU on commercial invoice (M06)                   |
+| **Duties & taxes**      | Import duties, VAT/GST, customs fees **not** in order total unless TaxJar calculates a collectible tax line; import duties payable at destination under DDU | **Phase 1 (Shopify + TaxJar):** TaxJar tax lines where McGrocer has a collection obligation (UK VAT, EU IOSS via TaxJar config, US **state sales tax** where nexus applies). **US federal import duty is NOT calculated by TaxJar** — customer sees DDU messaging that duties are payable at delivery. **Phase 2 (Compliance Engine live):** Compliance Engine adds deterministic import-duty estimates + shipping-rule checks; TaxJar still handles collectible tax lines. DDU on commercial invoice (M06) |
 | **Customs inspections** | May be inspected; delays outside McGrocer control                                                                 | `customs outcome` field (M06/M07/M12)                                                       |
 | **Refused shipments**   | If refused/returned/destroyed: shipping non-refundable; return fees may apply; confiscation may not be refundable | Return-eligibility check (M08) — DDU customs liability branch                               |
 | **Alcohol**             | Age verification may be required                                                                                  | Shopping-Readiness Check #3 + packing ticks (M01/M05)                                       |
@@ -844,7 +844,7 @@ Every item that needs to be bought externally gets its own record (a **Shopping 
 | 6   | The AI Shopper picks up the oldest retailer checkout and begins purchasing, acting through the gated tool layer (never the retailer site directly).                                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Checkout session started                                                            |
 | 7   | The AI Shopper logs into the retailer's website using securely stored credentials held in the gated tool layer.                                                                                                                                                                                                                                                                                                                                                                       | `[AGENT]`                          | AI Shopper → gated tool layer           | Logged in                                                                           |
 | 8   | The AI Shopper adds all required items (combined quantities for all orders needing them) to the Cart.                                                                                                                                                                                                                                                                                                                                                                                 | `[AGENT]`                          | AI Shopper                              | Retailer Cart built                                                                 |
-| 9   | **Spend-cap check (human-in-the-loop):** Grouped checkout combines items from **multiple customer orders** into one retailer cart and one payment. The spend cap is **£200 on the whole retailer cart total** for that session — not per customer or per order line. If the cart total exceeds £200, the AI Shopper pauses and the operations manager must approve before checkout continues. (Starting value confirmed by CEO June 2026 — will be reviewed upward once AI Shopper checkout accuracy is validated in production.) High grouped totals are expected; approval within **4 hours** is the operational norm (deputy: Ops Lead; then CEO; still no response → **denied**). [BUILD TASK — M02-CAP — Compare grouped retailer cart total to £200 before payment; route to ops approval if exceeded. Owner: Frappe Engineer — Sprint 1, Week 1] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
+| 9   | **Spend-cap check (human-in-the-loop):** Grouped checkout combines items from **multiple customer orders** into one retailer cart and one payment per vendor (one Tesco checkout, one Sainsbury's checkout, etc.). The spend cap is **£75 on the whole grouped retailer cart total for that vendor session** — not per customer or per order line. If the cart total exceeds £75, the AI Shopper pauses and the operations manager must approve before checkout continues. [CONFIRMED — Aisha + Peter, June 2026. Increase when AI Shopper checkout accuracy is validated in production.] Approval within **4 hours** is the operational norm (deputy: Ops Lead; then CEO; still no response → **denied**). [BUILD TASK — M02-CAP — Compare grouped retailer cart total to £75 before payment; route to ops approval if exceeded. Owner: Frappe Engineer — Sprint 1, Week 1] | `[AGENT]` pause; `[HUMAN]` approve | AI Shopper → operations hub             | Approval recorded if over cap                                                       |
 | 10  | **Retailer checkout idempotency (ST-F03):** Before checkout (including on Gated Tool Layer retry), the AI Shopper checks each Shopping Item for an existing `retailer_order_ref`. If a ref exists, poll retailer order status via the gated tool layer — do not start a duplicate checkout. Log retry decision in the Decision Log. [BUILD TASK — M02-RETRY-IDEM — Owner: AI Developer + Frappe Engineer — Sprint 1] | `[AGENT]` | AI Shopper → gated tool layer | Duplicate retailer checkout prevented |
 | 11  | The AI Shopper checks out: the McGrocer delivery address is pre-saved, payment is pre-saved, and the earliest available delivery slot to the warehouse is selected.                                                                                                                                                                                                                                                                                                                   | `[AGENT]`                          | AI Shopper → gated tool layer           | Order placed with retailer                                                          |
 | 12  | The AI Shopper records, against each Shopping Item, the retailer's order confirmation number, the expected delivery date, and the actual purchase cost. The Shopping Items are marked **Purchased**. Every input and response is written to the decision log.                                                                                                                                                                                                                         | `[AGENT]`                          | AI Shopper → operations hub             | Retailer order ref + expected delivery + cost; items **Purchased**; decision logged |
@@ -2102,7 +2102,7 @@ Every destination country has a de minimis threshold — the order value below w
 
 | Destination                | De minimis threshold                                            | What this means for McGrocer                                                                                             |
 | -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| USA                        | $800 USD                                                        | Orders below $800 are not charged import duties. Orders above $800 will incur US customs duties payable by the customer. |
+| USA                        | $800 de minimis **suspended** (2025+ reforms)                   | **Do not assume duty-free entry.** Customer is Importer of Record under DDU; **US Customs import duties apply** for essentially all commercial food/FMCG parcel imports. TaxJar at checkout covers **US state sales tax only** (where nexus) — not federal import duty. |
 | EU (all countries)         | €150                                                            | Import duties are waived below €150. VAT is still payable by the customer regardless of order value.                     |
 | Canada                     | CAD $20                                                         | Very low threshold — almost all orders will be subject to Canadian customs duties. Customer must be prepared for this.   |
 | Australia                  | AUD $1,000                                                      | Orders below AUD $1,000 avoid duties. GST (Goods and Services Tax) may still apply.                                      |
@@ -2123,6 +2123,8 @@ Every destination country has a de minimis threshold — the order value below w
 
 De minimis data is stored in the operations hub for every destination McGrocer ships to. At M01, the compliance service uses this data when assessing orders. At M06, the commercial invoice always states the actual sale price — McGrocer never under-declares values on customs documents.
 
+**TaxJar vs import duty at checkout:** TaxJar calculates **collectible tax** (UK VAT, EU IOSS, US state sales tax where nexus applies). **TaxJar does not calculate US Customs import duty** or other destination import duties — those remain customer-borne under DDU until the Compliance Engine Phase 2 adds duty estimates.
+
 > **De minimis data flow — confirmed (M11-b):**
 > **Option A** is the production architecture. Peter stores de
 > minimis thresholds in ERPNext (single source of truth). The
@@ -2142,7 +2144,7 @@ The de minimis table above covers the customer's import duty liability (customer
 | United Kingdom | Standard-rated supply | 20% | HMRC (MTD VAT) | Applied on all UK-destination orders |
 | European Union (below IOSS threshold €150) | IOSS — McGrocer collects and remits | Variable by EU state (typically 20–25%) | EU IOSS registration | McGrocer must be IOSS-registered; threshold is per consignment |
 | European Union (above IOSS threshold €150) | Import VAT — customer pays at border | 0% McGrocer liability | Customer liability | DDU model applies above threshold |
-| USA | No VAT equivalent | 0% | N/A | Sales tax is state-level and customer-borne under DDU |
+| USA | No VAT equivalent | 0% McGrocer UK VAT liability | N/A | **US state sales tax** collected via TaxJar where McGrocer has nexus. **US Customs import duty** is separate — customer-borne at border under DDU (see de minimis table). |
 | Canada | No VAT equivalent | 0% | N/A | GST/HST is customer-borne under DDU |
 | Australia, UAE, Saudi Arabia, other | 0% (zero-rated export) | 0% | HMRC (zero-rated) | UK VAT zero-rated export — no VAT charged |
 
@@ -2151,6 +2153,8 @@ The de minimis table above covers the customer's import duty liability (customer
 This table is the source the Sales Invoice tax line (M01) and the Compliance Engine output VAT value (M06) must draw from. Finance Lead owns this table; the Compliance and ERPNext teams implement from it.
 
 **TaxJar integration — international tax beyond UK/EU:**
+
+**[CONFIRMED — June 2026, Aisha]:** Phase 1 and Phase 2 checkout tax = **TaxJar only**. **Zonos is not used.** Full landed-cost / import-duty calculator waits for the **Compliance Engine (Phase 2)**. Until then, Phase 1 checkout shows TaxJar tax lines plus DDU messaging for import duties payable at delivery.
 
 The output VAT table above covers McGrocer's primary obligations (UK 20%, EU IOSS, zero-rated export). For the 150+ destination countries McGrocer ships to, tax obligations vary by destination, product category, and sales volume thresholds. TaxJar provides the per-destination, per-category tax calculation engine that fills this gap.
 
@@ -2320,7 +2324,7 @@ This is the gate for Phase 1 go-live. Nothing goes live until every item below i
 | Box dimensions loaded into ERPNext Box Size master (Ops Lead provides values) | [ ] |
 | Packaging consumables minimum stock levels + lead times entered (Ops Lead) | [ ] |
 | Write-off threshold and auto-refund limit configured (Finance Lead confirms values) | [ ] |
-| Spend cap configured in operations hub retailer settings — **£200 whole grouped cart** (Ops Lead confirms value) | [ ] |
+| Spend cap configured in operations hub retailer settings — **£75 whole grouped cart per vendor** (Ops Lead confirms value) | [ ] |
 | Company VAT number set in ERPNext + default Sales Tax Template assigned (Finance Lead) — **B1-VAT-GATE** | [ ] |
 | VAT pre-go-live gate live in order.placed subscriber (Frappe Engineer) | [ ] |
 | Finance deputy named for exception queue + manual OPEX (Finance Lead) | [ ] |
@@ -2737,7 +2741,7 @@ Every AI-assisted decision and order event is written to an **append-only log** 
 
 ### H. Landed cost
 
-At checkout the storefront shows the customer the **full landed cost** (price + estimated duties/taxes) via the Compliance Engine Tier 1, consistent with the **DDU** model where the customer is the Importer of Record. The commercial invoice generated at M06 always uses the **actual sale price** — never under-declared.
+At checkout the storefront shows the customer **collectible tax lines via TaxJar** (Phase 1: Shopify; Phase 2: Medusa Tax module) plus **DDU messaging** that import duties are payable at destination — consistent with the **DDU** model where the customer is the Importer of Record. **Phase 2:** the Compliance Engine Tier 1 adds deterministic import-duty estimates alongside TaxJar tax lines. The commercial invoice generated at M06 always uses the **actual sale price** — never under-declared.
 
 ### I. Substitution pre-approval
 
@@ -2824,6 +2828,11 @@ Medusa emits `order.placed` on checkout completion. A custom subscriber in `/src
 - Medusa Payment module (Stripe/PayPal) captures payment at checkout — PSPs integrate with Medusa, not ERPNext. The order.placed subscriber creates Sales Order, Sales Invoice, and Payment Entry in ERPNext from the order payload: line rates, shipping paid, applicable tax lines, payment method/reference, and total paid.
 - Actual checkout price from Medusa must flow to ERPNext Sales Order line rates and to Shopping Item `actual_purchase_price` — never the ERPNext Item catalog price.
 
+**Stripe authorize-then-capture — OPEN (Aisha stress test):**
+Current spec: Medusa Payment module **captures at checkout** before M01 compliance.
+Question: does Medusa v2 Stripe provider support **authorize → external capture trigger** after compliance pass without custom payment-session work?
+[INVESTIGATION — Owner: Peter + Chisom — document finding before Medusa cutover. Until resolved, keep capture-at-checkout; no flow change.]
+
 **Port configuration (dev-bench):**
 - Medusa backend: port 7000
 - Next.js storefront: port 7001
@@ -2851,7 +2860,7 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 | Guardrail                             | What it means here                                                                                                                                                                                                                                                                                                                 |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Gated tool layer (trust boundary)** | The AI Shopper and Dispatch agent never call a retailer site or carrier API directly. Every action goes through an audited integration layer that holds credentials, enforces allow-lists, and logs every call. If the tool layer is unavailable, agents stop — they cannot improvise.                                             |
-| **Threshold-based human-in-the-loop** | The agent pauses for a named human to approve when: a substitute price is more than the configured percentage above the original; the **grouped retailer cart total exceeds the £200 spend cap**; a high-value order changes destination/country; or a refund exceeds the auto-issue limit. Everything below threshold proceeds automatically. |
+| **Threshold-based human-in-the-loop** | The agent pauses for a named human to approve when: a substitute price is more than the configured percentage above the original; the **grouped retailer cart total exceeds the £75 spend cap (per vendor session)**; a high-value order changes destination/country; or a refund exceeds the auto-issue limit. Everything below threshold proceeds automatically. |
 | **Compensating actions (saga)**       | Every forward action has a documented, idempotent reversal so a half-finished sequence can always be unwound: reserve ↔ release stock; purchase ↔ refund; carrier label create ↔ void.                                                                                                                                             |
 | **Enriched decision log**             | The append-only record in §G — verbatim intent, tool inputs/response, rationale, model/rule version, confidence, actor, thread id, timestamp.                                                                                                                                                                                      |
 | **Deterministic replay**              | Because the canonical intent + inputs are stored, any agent action can be re-run later for audit or QA and produce the same decision — essential for compliance reviews and debugging.                                                                                                                                             |
@@ -2863,6 +2872,7 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 | Version | Date | Summary |
 |---|---|---|
+| **3.8.4** | 2026-06-11 | Aisha final call: £75 spend cap per vendor cart; TaxJar confirmed (not Zonos); US de minimis $800 suspended + TaxJar/duty split; Stripe authorize-capture OPEN investigation |
 | **3.8.3** | 2026-06-11 | Close Aisha OPEN gaps: M01-e Phase 1 fraud fallback + agent outage circuit breaker; M06-c UPS Express Saver validation matrix; M06-b FDA Phase 1 SOP; M06-d customs CS 24h SLA; M11-b de minimis Option A confirmed |
 | **3.8.2** | 2026-06-09 | STRESS-OPS agreed items closed in doc: whole-cart £200 spend cap; Phase 1 margin honesty; VAT gate B1-VAT-GATE; BC6/90%/barcode SLAs; ST-F03/04/07/08/12 build tasks; digest metrics |
 | **3.8.1** | 2026-06-09 | (Superseded by 3.8.2 — per-customer cap reverted to whole-cart per CEO) |
@@ -2875,5 +2885,5 @@ Current best practice for letting AI agents transact on a business's behalf. Bui
 
 ---
 
-*McGrocer 2.0 — Automated Operations Flow — v3.8.3 — 2026-06-11*
+*McGrocer 2.0 — Automated Operations Flow — v3.8.4 — 2026-06-11*
 *Authoritative operations specification. Plain ecommerce language for the whole company; appendix for system builders. Aligns with the CEO Fulfilment Operations Benchmark (June 2026), ARCH-001 Agentic Platform (SOW v1.3), and the 360° Master Architecture.*
